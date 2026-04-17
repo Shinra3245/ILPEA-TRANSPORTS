@@ -1,0 +1,19 @@
+# Datos crudos y sensibles (¡Crucial para ILPEA!)
+data-science/data/*.xlsx
+data-science/data/*.csv
+data-science/data/*.pdf
+*.json
+
+# Entornos Virtuales de Python
+venv/
+env/
+__pycache__/
+
+# Node / Frontend / Backend
+node_modules/
+.env
+.env.local
+
+# Logs y SO
+*.log
+.DS_Store
