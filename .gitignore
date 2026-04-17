@@ -2,7 +2,7 @@
 data-science/data/*.xlsx
 data-science/data/*.csv
 data-science/data/*.pdf
-*.json
+firebase-key.json
 
 # Entornos Virtuales de Python
 venv/
