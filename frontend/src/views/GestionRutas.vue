@@ -19,6 +19,12 @@
   :class="['nav-item', { active: $route.path === '/admin/usuarios' }]">
   Usuarios
 </button>
+
+        <button
+          @click="irAAsignaciones"
+          :class="['nav-item', { active: $route.path === '/admin/asignaciones' }]">
+          Asignaciones
+        </button>
       </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
     </aside>
@@ -70,11 +76,10 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { useRouter } from 'vue-router';
 import { useAuth } from '../composables/useAuth';
 
 const router = useRouter();
-const route = useRoute();
 
 // Interfaz TypeScript para el tipado estricto
 interface RutaSamsara {
@@ -107,6 +112,10 @@ const irADashboard = () => {
 // Agrega esta función debajo de irADashboard
 const irAUsuarios = () => {
   router.push('/admin/usuarios');
+};
+
+const irAAsignaciones = () => {
+  router.push('/admin/asignaciones');
 };
 
 const cerrarSesion = async () => {

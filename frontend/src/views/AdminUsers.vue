@@ -19,6 +19,12 @@
           :class="['nav-item', { active: $route.path === '/admin/usuarios' }]">
           Usuarios
         </button>
+
+        <button
+          @click="irAAsignaciones"
+          :class="['nav-item', { active: $route.path === '/admin/asignaciones' }]">
+          Asignaciones
+        </button>
       </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
     </aside>
@@ -60,6 +66,10 @@ const irAlDashboard = () => {
 
 const irARutasApi = () => {
   router.push('/admin/rutas');
+};
+
+const irAAsignaciones = () => {
+  router.push('/admin/asignaciones');
 };
 
 const cerrarSesion = async () => {
