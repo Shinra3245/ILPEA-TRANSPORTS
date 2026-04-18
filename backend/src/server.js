@@ -387,25 +387,464 @@ function generarInsightsLocales(rutas) {
     const tipoUnidad = String(ruta['tipo de unidad'] || '').toLowerCase();
 
     if (!Number.isNaN(ocupacion) && ocupacion < 40) {
+      const probabilidadCancelacion = calcularProbabilidadCancelacionDesdeOcupacion(ocupacion);
       insights.push({
+        recomendacion_id: crearIdRecomendacion(rutaId, insights.length),
         titulo: `Cancelar Ruta - ${nombreRuta}`,
         descripcion: `La ruta ${nombreRuta} tiene una ocupación del ${ocupacion}%, menor al 40%.`,
         prioridad: 'alta',
-        ruta_id: rutaId
+        ruta_id: rutaId,
+        prob_cancelacion: probabilidadCancelacion,
+        ruta_alternativa_sugerida: null
       });
     }
 
     if (tipoUnidad.includes('autobus') && !Number.isNaN(pasajeros) && pasajeros <= 12) {
       insights.push({
+        recomendacion_id: crearIdRecomendacion(rutaId, insights.length),
         titulo: `Sugerir Van - ${nombreRuta}`,
         descripcion: `La ruta ${nombreRuta} tiene ${pasajeros} pasajeros, se sugiere cambiar a una Van.`,
         prioridad: 'media',
-        ruta_id: rutaId
+        ruta_id: rutaId,
+        prob_cancelacion: null,
+        ruta_alternativa_sugerida: null
       });
     }
   });
 
   return insights;
+}
+
+const COLECCION_HISTORICO_RECOMENDACIONES = 'historico_recomendaciones';
+const COLECCION_FEEDBACK_IA = 'ai_feedback_recomendaciones';
+const COLECCION_PLANES_IA = 'ai_planes_ejecutados';
+const SEMANAS_MEMORIA_DEFECTO = 4;
+const DECISIONES_IA_VALIDAS = ['ACEPTADA', 'RECHAZADA', 'PENDIENTE'];
+
+function obtenerTipoEjemploPorDecision(decision) {
+  if (decision === 'ACEPTADA') {
+    return 'POSITIVE';
+  }
+
+  if (decision === 'RECHAZADA') {
+    return 'NEGATIVE';
+  }
+
+  return 'PENDING';
+}
+
+function construirIncrementosDecisionSemanal(decision) {
+  return {
+    total_feedback: admin.firestore.FieldValue.increment(1),
+    total_aceptadas: admin.firestore.FieldValue.increment(decision === 'ACEPTADA' ? 1 : 0),
+    total_rechazadas: admin.firestore.FieldValue.increment(decision === 'RECHAZADA' ? 1 : 0),
+    total_pendientes: admin.firestore.FieldValue.increment(decision === 'PENDIENTE' ? 1 : 0),
+    total_negative_examples: admin.firestore.FieldValue.increment(decision === 'RECHAZADA' ? 1 : 0),
+    total_positive_examples: admin.firestore.FieldValue.increment(decision === 'ACEPTADA' ? 1 : 0)
+  };
+}
+
+function serializarFechaFirestore(valor) {
+  if (!valor) {
+    return null;
+  }
+
+  if (valor instanceof Date) {
+    return valor.toISOString();
+  }
+
+  if (typeof valor.toDate === 'function') {
+    return valor.toDate().toISOString();
+  }
+
+  return null;
+}
+
+function calcularEstadoImpactoPlan(cantidadEmpleadosMovidos) {
+  const cantidad = Number(cantidadEmpleadosMovidos);
+
+  if (!Number.isFinite(cantidad) || cantidad <= 0) {
+    return 'bajo';
+  }
+
+  if (cantidad >= 10) {
+    return 'alto';
+  }
+
+  if (cantidad >= 4) {
+    return 'medio';
+  }
+
+  return 'bajo';
+}
+
+function formatearFechaISO(fecha) {
+  if (!(fecha instanceof Date) || Number.isNaN(fecha.getTime())) {
+    return null;
+  }
+
+  return fecha.toISOString().slice(0, 10);
+}
+
+function obtenerInicioSemana(fechaReferencia = new Date()) {
+  const fecha = new Date(fechaReferencia);
+  const diaSemana = fecha.getUTCDay(); // 0 domingo, 1 lunes
+  const ajuste = diaSemana === 0 ? -6 : 1 - diaSemana;
+
+  fecha.setUTCDate(fecha.getUTCDate() + ajuste);
+  fecha.setUTCHours(0, 0, 0, 0);
+  return fecha;
+}
+
+function obtenerSemanaKey(fechaReferencia = new Date()) {
+  return formatearFechaISO(obtenerInicioSemana(fechaReferencia));
+}
+
+function normalizarDecisionIA(decision) {
+  const valor = textoNormalizado(decision).toLowerCase();
+
+  if (!valor) {
+    return null;
+  }
+
+  if (['aceptada', 'aceptado', 'aprobar', 'aprobada', 'approved', 'approve', 'si', 's'].includes(valor)) {
+    return 'ACEPTADA';
+  }
+
+  if (['rechazada', 'rechazado', 'rechazar', 'denied', 'deny', 'no'].includes(valor)) {
+    return 'RECHAZADA';
+  }
+
+  if (['pendiente', 'postergada', 'diferida', 'defer', 'deferred'].includes(valor)) {
+    return 'PENDIENTE';
+  }
+
+  return valor.toUpperCase();
+}
+
+function normalizarBooleano(valor) {
+  if (typeof valor === 'boolean') {
+    return valor;
+  }
+
+  const texto = textoNormalizado(valor).toLowerCase();
+  if (!texto) {
+    return null;
+  }
+
+  if (['1', 'true', 'si', 's', 'yes', 'correcto', 'correcta'].includes(texto)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'incorrecto', 'incorrecta'].includes(texto)) {
+    return false;
+  }
+
+  return null;
+}
+
+function extraerRutaTexto(item) {
+  if (!item || typeof item !== 'object') {
+    const textoDirecto = textoNormalizado(item);
+    return textoDirecto || null;
+  }
+
+  const posibles = [
+    item.ruta_id,
+    item.id_ruta,
+    item.ruta,
+    item.ruta_codigo,
+    item.nombre_ruta,
+    item.nombre,
+    item.ruta_nombre
+  ];
+
+  for (const candidato of posibles) {
+    const texto = textoNormalizado(candidato);
+    if (texto) {
+      return texto;
+    }
+  }
+
+  return null;
+}
+
+function incrementarFrecuenciaRuta(mapa, rutaTexto) {
+  const ruta = textoNormalizado(rutaTexto);
+  if (!ruta) {
+    return;
+  }
+
+  mapa.set(ruta, (mapa.get(ruta) || 0) + 1);
+}
+
+function calcularProbabilidadCancelacionDesdeOcupacion(ocupacion) {
+  const ocupacionNumero = Number(ocupacion);
+  if (Number.isNaN(ocupacionNumero)) {
+    return null;
+  }
+
+  if (ocupacionNumero >= 40) {
+    return 0;
+  }
+
+  const probabilidad = Math.min(0.95, Math.max(0.4, (40 - ocupacionNumero) / 40));
+  return Number(probabilidad.toFixed(2));
+}
+
+function crearIdRecomendacion(rutaId, indice = 0) {
+  const fragmentoRuta = textoNormalizado(rutaId) || 'sin-ruta';
+  return `REC-${Date.now()}-${fragmentoRuta}-${indice + 1}`;
+}
+
+function sanitizarInsight(insight, indice = 0) {
+  if (!insight || typeof insight !== 'object') {
+    return null;
+  }
+
+  const rutaId = textoNormalizado(insight.ruta_id || insight.id_ruta || insight.ruta);
+  const titulo = textoNormalizado(insight.titulo || insight.title);
+  const descripcion = textoNormalizado(insight.descripcion || insight.description);
+  const prioridadRaw = textoNormalizado(insight.prioridad || 'media').toLowerCase();
+  const prioridad = ['alta', 'media', 'baja'].includes(prioridadRaw) ? prioridadRaw : 'media';
+  const probCancelacion = Number(insight.prob_cancelacion ?? insight.probabilidad_cancelacion);
+
+  if (!rutaId || !titulo || !descripcion) {
+    return null;
+  }
+
+  return {
+    recomendacion_id: textoNormalizado(insight.recomendacion_id) || crearIdRecomendacion(rutaId, indice),
+    titulo,
+    descripcion,
+    prioridad,
+    ruta_id: rutaId,
+    prob_cancelacion: Number.isFinite(probCancelacion) ? Number(probCancelacion.toFixed(2)) : null,
+    ruta_alternativa_sugerida: textoNormalizado(
+      insight.ruta_alternativa_sugerida || insight.ruta_destino_id || insight.ruta_destino || ''
+    ) || null
+  };
+}
+
+function sanitizarListaInsights(insights) {
+  if (!Array.isArray(insights)) {
+    return [];
+  }
+
+  return insights
+    .map((insight, indice) => sanitizarInsight(insight, indice))
+    .filter(Boolean);
+}
+
+function formatearPorcentaje(fraccion) {
+  if (!Number.isFinite(fraccion)) {
+    return 'N/D';
+  }
+
+  return `${Math.round(fraccion * 100)}%`;
+}
+
+function construirResumenDecisiones(decisiones, limite = 4) {
+  if (!Array.isArray(decisiones) || !decisiones.length) {
+    return 'Sin decisiones recientes registradas.';
+  }
+
+  return decisiones.slice(0, limite).join(' | ');
+}
+
+async function construirAprendizajePrevioIA({ semanas = SEMANAS_MEMORIA_DEFECTO } = {}) {
+  const frecuenciaRutas = new Map();
+  const decisiones = [];
+  let totalDecisiones = 0;
+  let totalAceptadas = 0;
+  let totalEvaluadas = 0;
+  let totalAcertadas = 0;
+  let semanasLeidas = 0;
+
+  let historicoSnapshot;
+  try {
+    historicoSnapshot = await db
+      .collection(COLECCION_HISTORICO_RECOMENDACIONES)
+      .orderBy('semana_inicio', 'desc')
+      .limit(semanas)
+      .get();
+  } catch (error) {
+    console.warn('No se pudo ordenar historico_recomendaciones por semana_inicio. Se usa fallback simple.');
+    historicoSnapshot = await db.collection(COLECCION_HISTORICO_RECOMENDACIONES).limit(semanas).get();
+  }
+
+  semanasLeidas = historicoSnapshot.size;
+
+  historicoSnapshot.forEach((doc) => {
+    const data = doc.data() || {};
+
+    if (Array.isArray(data.rutas_criticas_recurrentes)) {
+      data.rutas_criticas_recurrentes.forEach((ruta) => incrementarFrecuenciaRuta(frecuenciaRutas, ruta));
+    }
+
+    const recomendaciones = Array.isArray(data.recomendaciones) ? data.recomendaciones : [];
+    recomendaciones.forEach((recomendacion) => {
+      incrementarFrecuenciaRuta(frecuenciaRutas, extraerRutaTexto(recomendacion));
+
+      const decision = normalizarDecisionIA(
+        recomendacion.decision_admin || recomendacion.decision || recomendacion.feedback_admin
+      );
+
+      if (decision) {
+        totalDecisiones += 1;
+        if (decision === 'ACEPTADA') {
+          totalAceptadas += 1;
+        }
+
+        const rutaTexto = extraerRutaTexto(recomendacion) || 'Ruta sin identificar';
+        decisiones.push(`${rutaTexto}: ${decision}`);
+      }
+
+      const evaluacion = normalizarBooleano(
+        recomendacion.evaluacion_correcta ?? recomendacion.feedback_correcto ?? recomendacion.resultado_correcto
+      );
+
+      if (evaluacion !== null) {
+        totalEvaluadas += 1;
+        if (evaluacion) {
+          totalAcertadas += 1;
+        }
+      }
+    });
+
+    if (Array.isArray(data.decisiones_admin_recientes)) {
+      data.decisiones_admin_recientes.forEach((decision) => {
+        const texto = textoNormalizado(decision);
+        if (texto) {
+          decisiones.push(texto);
+        }
+      });
+    } else {
+      const decisionTexto = textoNormalizado(data.decisiones_admin_recientes);
+      if (decisionTexto) {
+        decisiones.push(decisionTexto);
+      }
+    }
+
+    if (Array.isArray(data.feedback_admin)) {
+      data.feedback_admin.forEach((feedback) => {
+        incrementarFrecuenciaRuta(frecuenciaRutas, extraerRutaTexto(feedback));
+
+        const decision = normalizarDecisionIA(feedback.decision);
+        if (decision) {
+          totalDecisiones += 1;
+          if (decision === 'ACEPTADA') {
+            totalAceptadas += 1;
+          }
+
+          const rutaTexto = extraerRutaTexto(feedback) || 'Ruta sin identificar';
+          decisiones.push(`${rutaTexto}: ${decision}`);
+        }
+      });
+    }
+  });
+
+  let feedbackSnapshot;
+  try {
+    feedbackSnapshot = await db
+      .collection(COLECCION_FEEDBACK_IA)
+      .orderBy('creado_en', 'desc')
+      .limit(Math.max(10, semanas * 8))
+      .get();
+  } catch (error) {
+    console.warn('No se pudo ordenar ai_feedback_recomendaciones por creado_en. Se usa fallback simple.');
+    feedbackSnapshot = await db.collection(COLECCION_FEEDBACK_IA).limit(Math.max(10, semanas * 8)).get();
+  }
+
+  feedbackSnapshot.forEach((doc) => {
+    const data = doc.data() || {};
+    incrementarFrecuenciaRuta(frecuenciaRutas, extraerRutaTexto(data));
+
+    const decision = normalizarDecisionIA(data.decision);
+    if (!decision) {
+      return;
+    }
+
+    totalDecisiones += 1;
+    if (decision === 'ACEPTADA') {
+      totalAceptadas += 1;
+    }
+
+    const rutaTexto = extraerRutaTexto(data) || 'Ruta sin identificar';
+    const motivo = textoNormalizado(data.razon) || textoNormalizado(data.motivo) || '';
+    decisiones.push(motivo ? `${rutaTexto}: ${decision} (${motivo})` : `${rutaTexto}: ${decision}`);
+
+    const evaluacion = normalizarBooleano(data.evaluacion_correcta ?? data.feedback_correcto ?? data.resultado_correcto);
+    if (evaluacion !== null) {
+      totalEvaluadas += 1;
+      if (evaluacion) {
+        totalAcertadas += 1;
+      }
+    }
+  });
+
+  const rutasCriticas = [...frecuenciaRutas.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([ruta]) => ruta);
+
+  const efectividad = totalEvaluadas > 0
+    ? formatearPorcentaje(totalAcertadas / totalEvaluadas)
+    : totalDecisiones > 0
+      ? formatearPorcentaje(totalAceptadas / totalDecisiones)
+      : 'N/D';
+
+  const tasaAceptacion = totalDecisiones > 0
+    ? formatearPorcentaje(totalAceptadas / totalDecisiones)
+    : 'N/D';
+
+  return {
+    semanas_consideradas: semanasLeidas || semanas,
+    rutas_criticas_recurrentes: rutasCriticas,
+    efectividad_sugerencias_pasadas: efectividad,
+    tasa_aceptacion_admin: tasaAceptacion,
+    decisiones_admin_recientes: construirResumenDecisiones(decisiones),
+    observacion: rutasCriticas.length
+      ? 'El contexto prioriza patrones repetidos y decisiones recientes del administrador.'
+      : 'Sin historico suficiente. Prioriza la metrica actual con validacion humana.'
+  };
+}
+
+async function construirContextoIAConMemoria(rutasActuales, semanas = SEMANAS_MEMORIA_DEFECTO) {
+  const aprendizajePrevio = await construirAprendizajePrevioIA({ semanas });
+
+  return {
+    metricas_actuales: Array.isArray(rutasActuales) ? rutasActuales : [],
+    aprendizaje_previo: aprendizajePrevio
+  };
+}
+
+function asientosOcupadosComoSet(asientosReservados, asientosPorEmpleado) {
+  const ocupados = new Set(normalizarAsientosReservados(asientosReservados));
+
+  Object.values(normalizarAsientosPorEmpleado(asientosPorEmpleado)).forEach((asiento) => {
+    const numero = Number(asiento);
+    if (Number.isInteger(numero) && numero > 0) {
+      ocupados.add(numero);
+    }
+  });
+
+  return ocupados;
+}
+
+function siguienteAsientoDisponible(asientosOcupados, capacidadMaxima) {
+  const capacidad = Number(capacidadMaxima);
+  if (!Number.isInteger(capacidad) || capacidad <= 0) {
+    throw new Error('TARGET_CAPACITY_INVALID: Capacidad de destino invalida.');
+  }
+
+  for (let asiento = 1; asiento <= capacidad; asiento += 1) {
+    if (!asientosOcupados.has(asiento)) {
+      return asiento;
+    }
+  }
+
+  throw new Error('TARGET_CAPACITY_EXCEEDED: No hay asientos disponibles en la ruta destino.');
 }
 
 // Middlewares Globales
@@ -840,7 +1279,8 @@ app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
 
   try {
     const snapshot = await db.collection('rutas').get();
-    snapshot.forEach((doc) => rutas.push(doc.data()));
+    snapshot.forEach((doc) => rutas.push({ id: doc.id, ...doc.data() }));
+    const contextAI = await construirContextoIAConMemoria(rutas, SEMANAS_MEMORIA_DEFECTO);
 
     if (!openai) {
       return res.status(200).json({
@@ -855,11 +1295,11 @@ app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
         {
           role: 'system',
           content:
-            'Eres un copiloto logístico de ILPEA. Responde en español con recomendaciones breves, accionables y orientadas a operación de rutas.'
+            'Eres un copiloto logistico de ILPEA. Responde en espanol con recomendaciones breves, accionables y orientadas a operacion. Usa el aprendizaje_previo para detectar patrones de cancelacion, decisiones historicas del admin y riesgo operativo semanal. Si hay incertidumbre, indicala y sugiere una validacion puntual.'
         },
         {
           role: 'user',
-          content: `Consulta del jefe: ${mensaje_usuario}\n\nDatos de rutas actuales: ${JSON.stringify(rutas)}`
+          content: `Consulta del jefe: ${mensaje_usuario}\n\nContexto IA (actual + historico): ${JSON.stringify(contextAI)}`
         }
       ],
       temperature: 0.2
@@ -897,30 +1337,36 @@ app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
 // Solo Admin y Jefe pueden ver insights
 // ==========================================
 app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res) => {
-  if (!openai) {
-    return res.status(503).json({
-      success: false,
-      message: 'OpenAI no está configurado. Define OPENAI_API_KEY en backend/.env y reinicia el servidor.',
-      insights: []
-    });
-  }
-
   let rutas = [];
 
   try {
     // 1. Extraemos TODAS las rutas de Firebase
     const snapshot = await db.collection('rutas').get();
-    snapshot.forEach(doc => rutas.push(doc.data()));
+    snapshot.forEach((doc) => rutas.push({ id: doc.id, ...doc.data() }));
+
+    const contextAI = await construirContextoIAConMemoria(rutas, SEMANAS_MEMORIA_DEFECTO);
+
+    if (!openai) {
+      return res.status(200).json({
+        success: true,
+        insights: sanitizarListaInsights(generarInsightsLocales(rutas)),
+        contexto_memoria: contextAI.aprendizaje_previo,
+        source: 'fallback'
+      });
+    }
 
     // 2. El Prompt Maestro
     const systemPrompt = `
-      Actúa como un Analista Senior de Logística e IA para ILPEA. Genera "Insights de Acción" inmediatos basados en los datos de rutas que recibas.
+      Actua como un Analista Senior de Logistica e IA para ILPEA. Genera "Insights de Accion" basados en metricas actuales y aprendizaje historico.
       
       REGLAS:
       1. Prioridad ALTA: Rutas con ocupación < 40%.
       2. Prioridad MEDIA: Autobuses con <= 12 pasajeros (Sugerir Van).
+      3. Considera contexto de las ultimas 4 semanas y decisiones recientes del administrador.
       
-      SALIDA ESTRICTA: Devuelve ÚNICAMENTE un objeto JSON con una propiedad "insights" que contenga un arreglo de objetos con "titulo", "descripcion", "prioridad" (alta/media/baja), y "ruta_id". No incluyas texto extra.
+      SALIDA ESTRICTA: Devuelve UNICAMENTE un objeto JSON con propiedad "insights".
+      Cada insight debe incluir: "recomendacion_id", "titulo", "descripcion", "prioridad" (alta/media/baja), "ruta_id", "prob_cancelacion" (0 a 1 o null), "ruta_alternativa_sugerida" (string o null).
+      No incluyas texto extra fuera del JSON.
     `;
 
     // 3. Consulta a OpenAI enviando el prompt y los datos de Firebase
@@ -929,32 +1375,45 @@ app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res)
       response_format: { type: "json_object" }, 
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `Analiza estos datos y genera el JSON: ${JSON.stringify(rutas)}` }
+        { role: 'user', content: `Analiza estos datos y genera el JSON: ${JSON.stringify(contextAI)}` }
       ],
       temperature: 0.2
     });
 
     // 4. Se lo enviamos procesado al Frontend
     const rawContent = completion.choices?.[0]?.message?.content;
-    const dataIA = rawContent ? JSON.parse(rawContent) : null;
-    const insights = Array.isArray(dataIA?.insights) ? dataIA.insights : [];
+    let dataIA = null;
+
+    try {
+      dataIA = rawContent ? JSON.parse(rawContent) : null;
+    } catch (error) {
+      console.warn('La IA devolvio un JSON invalido en insights. Se usa fallback local.');
+    }
+
+    const insights = sanitizarListaInsights(Array.isArray(dataIA?.insights) ? dataIA.insights : []);
 
     if (!insights.length) {
-      return res.status(502).json({
-        success: false,
-        message: 'La IA respondió sin insights válidos. Intenta de nuevo.',
-        insights: []
+      return res.status(200).json({
+        success: true,
+        insights: sanitizarListaInsights(generarInsightsLocales(rutas)),
+        contexto_memoria: contextAI.aprendizaje_previo,
+        source: 'fallback'
       });
     }
 
-    res.json({ success: true, insights });
+    res.json({
+      success: true,
+      insights,
+      contexto_memoria: contextAI.aprendizaje_previo,
+      source: 'openai'
+    });
 
   } catch (error) {
     if (esTimeoutOpenAI(error)) {
       console.warn('OpenAI tardó demasiado; usando insights locales.');
       return res.status(200).json({
         success: true,
-        insights: generarInsightsLocales(rutas),
+        insights: sanitizarListaInsights(generarInsightsLocales(rutas)),
         source: 'fallback'
       });
     }
@@ -962,8 +1421,529 @@ app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res)
     console.error("Error generando insights:", error);
     return res.status(200).json({
       success: true,
-      insights: generarInsightsLocales(rutas),
+      insights: sanitizarListaInsights(generarInsightsLocales(rutas)),
       source: 'fallback'
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 5A: Feedback de recomendaciones IA
+// Solo Admin registra decision final
+// ==========================================
+app.post('/api/ai/feedback', autorizar('insights:ver'), async (req, res) => {
+  if (req.usuario.rol !== ROLES.ADMIN) {
+    return res.status(403).json({
+      success: false,
+      message: 'Solo un ADMIN puede registrar feedback oficial de recomendaciones IA.'
+    });
+  }
+
+  const {
+    recomendacion_id,
+    ruta_id,
+    decision,
+    razon,
+    prob_cancelacion,
+    ruta_alternativa_sugerida,
+    metadata
+  } = req.body || {};
+
+  const rutaId = textoNormalizado(ruta_id);
+  const decisionNormalizada = normalizarDecisionIA(decision);
+  const probCancelacion = Number(prob_cancelacion);
+
+  if (!rutaId) {
+    return res.status(400).json({
+      success: false,
+      message: 'ruta_id es obligatorio para registrar feedback.'
+    });
+  }
+
+  if (!decisionNormalizada || !DECISIONES_IA_VALIDAS.includes(decisionNormalizada)) {
+    return res.status(400).json({
+      success: false,
+      message: `decision invalida. Valores permitidos: ${DECISIONES_IA_VALIDAS.join(', ')}`
+    });
+  }
+
+  try {
+    const creadoEn = new Date();
+    const semanaKey = obtenerSemanaKey(creadoEn);
+    const feedbackRef = db.collection(COLECCION_FEEDBACK_IA).doc();
+    const tipoEjemplo = obtenerTipoEjemploPorDecision(decisionNormalizada);
+
+    const entradaMemoria = {
+      feedback_id: feedbackRef.id,
+      recomendacion_id: textoNormalizado(recomendacion_id) || null,
+      ruta_id: rutaId,
+      decision: decisionNormalizada,
+      tipo_ejemplo: tipoEjemplo,
+      es_negative_example: tipoEjemplo === 'NEGATIVE',
+      razon: textoNormalizado(razon) || null,
+      prob_cancelacion: Number.isFinite(probCancelacion) ? Number(probCancelacion.toFixed(2)) : null,
+      ruta_alternativa_sugerida: textoNormalizado(ruta_alternativa_sugerida) || null,
+      creado_por: req.usuario.uid,
+      creado_en: creadoEn
+    };
+
+    const feedback = {
+      ...entradaMemoria,
+      metadata: metadata && typeof metadata === 'object' ? metadata : {},
+      creado_por: req.usuario.uid,
+      creado_por_rol: req.usuario.rol,
+      creado_en: creadoEn,
+      semana_key: semanaKey
+    };
+
+    await feedbackRef.set(feedback);
+
+    await db.collection(COLECCION_HISTORICO_RECOMENDACIONES).doc(semanaKey).set({
+      semana_key: semanaKey,
+      semana_inicio: obtenerInicioSemana(creadoEn),
+      ...construirIncrementosDecisionSemanal(decisionNormalizada),
+      recomendaciones: admin.firestore.FieldValue.arrayUnion(entradaMemoria),
+      feedback_admin: admin.firestore.FieldValue.arrayUnion(entradaMemoria),
+      ...(tipoEjemplo === 'NEGATIVE'
+        ? { ejemplos_negativos: admin.firestore.FieldValue.arrayUnion(entradaMemoria) }
+        : {}),
+      ...(tipoEjemplo === 'POSITIVE'
+        ? { ejemplos_positivos: admin.firestore.FieldValue.arrayUnion(entradaMemoria) }
+        : {}),
+      actualizado_en: creadoEn,
+      actualizado_por: req.usuario.uid
+    }, { merge: true });
+
+    res.status(201).json({
+      success: true,
+      message: 'Feedback IA registrado correctamente.',
+      feedback: {
+        id: feedbackRef.id,
+        ...feedback
+      }
+    });
+  } catch (error) {
+    console.error('Error registrando feedback IA:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'No fue posible registrar el feedback IA.'
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 5B: Ejecutar plan IA (transaccional)
+// Solo Admin puede ejecutar el plan
+// ==========================================
+app.post('/api/ai/ejecutar-plan', autorizar('asignacion:crear'), async (req, res) => {
+  if (req.usuario.rol !== ROLES.ADMIN) {
+    return res.status(403).json({
+      success: false,
+      message: 'Solo un ADMIN puede ejecutar planes masivos de IA.'
+    });
+  }
+
+  const {
+    ruta_origen_id,
+    ruta_destino_id,
+    fecha,
+    turno,
+    empleados_ids,
+    recomendacion_id,
+    motivo
+  } = req.body || {};
+
+  const rutaOrigenSolicitada = textoNormalizado(ruta_origen_id);
+  const rutaDestinoSolicitada = textoNormalizado(ruta_destino_id);
+  const fechaPlan = textoNormalizado(fecha);
+  const turnoPlan = turnoNormalizado(turno);
+
+  if (!rutaOrigenSolicitada || !rutaDestinoSolicitada || !fechaPlan) {
+    return res.status(400).json({
+      success: false,
+      message: 'ruta_origen_id, ruta_destino_id y fecha son requeridos.'
+    });
+  }
+
+  if (rutaOrigenSolicitada === rutaDestinoSolicitada) {
+    return res.status(400).json({
+      success: false,
+      message: 'La ruta de origen y destino deben ser diferentes.'
+    });
+  }
+
+  const empleadosSolicitados = Array.isArray(empleados_ids)
+    ? [...new Set(empleados_ids.map((id) => textoNormalizado(id)).filter(Boolean))]
+    : null;
+
+  let resultado = null;
+
+  try {
+    const rutaOrigen = await resolverRutaPorIdentificador(rutaOrigenSolicitada);
+    if (!rutaOrigen) {
+      return res.status(404).json({
+        success: false,
+        message: 'La ruta de origen no existe.'
+      });
+    }
+
+    const rutaDestino = await resolverRutaPorIdentificador(rutaDestinoSolicitada);
+    if (!rutaDestino) {
+      return res.status(404).json({
+        success: false,
+        message: 'La ruta de destino no existe.'
+      });
+    }
+
+    const planRef = db.collection(COLECCION_PLANES_IA).doc();
+    const feedbackRef = db.collection(COLECCION_FEEDBACK_IA).doc();
+
+    await db.runTransaction(async (t) => {
+      const programacionOrigen = await resolverProgramacion(fechaPlan, rutaOrigen.id, turnoPlan, t);
+      if (!programacionOrigen.data) {
+        throw new Error('SOURCE_ASSIGNMENT_NOT_FOUND: No existe programacion para la ruta origen en esa fecha/turno.');
+      }
+
+      const dataOrigen = programacionOrigen.data || {};
+      const pasajerosOrigen = [...new Set(
+        (Array.isArray(dataOrigen.pasajeros_ids) ? dataOrigen.pasajeros_ids : [])
+          .map((id) => textoNormalizado(id))
+          .filter(Boolean)
+      )];
+
+      if (!pasajerosOrigen.length) {
+        throw new Error('EMPTY_SOURCE_ROUTE: La ruta origen no tiene empleados asignados para mover.');
+      }
+
+      const asientosOrigen = normalizarAsientosReservados(dataOrigen.asientos_reservados);
+      const asientosPorEmpleadoOrigen = normalizarAsientosPorEmpleado(dataOrigen.asientos_por_empleado);
+
+      const empleadosMover = empleadosSolicitados && empleadosSolicitados.length
+        ? empleadosSolicitados
+        : [...pasajerosOrigen];
+
+      if (!empleadosMover.length) {
+        throw new Error('EMPTY_MOVE_SET: No se recibieron empleados para mover.');
+      }
+
+      const empleadosNoEncontrados = empleadosMover.filter((idEmpleado) => !pasajerosOrigen.includes(idEmpleado));
+      if (empleadosNoEncontrados.length) {
+        throw new Error(`EMPLOYEE_NOT_IN_SOURCE: No estan asignados en ruta origen: ${empleadosNoEncontrados.join(', ')}`);
+      }
+
+      const programacionDestino = await resolverProgramacion(fechaPlan, rutaDestino.id, turnoPlan, t);
+      let dataDestino = programacionDestino.data;
+
+      if (!dataDestino) {
+        dataDestino = construirProgramacionBase({
+          fecha: fechaPlan,
+          idRuta: rutaDestino.id,
+          turno: turnoPlan,
+          rutaData: rutaDestino.data,
+          uidCreador: req.usuario.uid
+        });
+
+        t.set(programacionDestino.docRef, dataDestino, { merge: true });
+      }
+
+      const pasajerosDestino = [...new Set(
+        (Array.isArray(dataDestino.pasajeros_ids) ? dataDestino.pasajeros_ids : [])
+          .map((id) => textoNormalizado(id))
+          .filter(Boolean)
+      )];
+      const asientosDestino = normalizarAsientosReservados(dataDestino.asientos_reservados);
+      const asientosPorEmpleadoDestino = normalizarAsientosPorEmpleado(dataDestino.asientos_por_empleado);
+
+      const duplicadosDestino = empleadosMover.filter((idEmpleado) => pasajerosDestino.includes(idEmpleado));
+      if (duplicadosDestino.length) {
+        throw new Error(`DUPLICATE_TARGET_ASSIGNMENT: Ya asignados en destino: ${duplicadosDestino.join(', ')}`);
+      }
+
+      const capacidadDestino = Number(dataDestino.capacidad_limite) || Number(rutaDestino.data.capacidad_real) || 12;
+      const ocupacionDestinoActual = Math.max(pasajerosDestino.length, asientosDestino.length);
+      if (ocupacionDestinoActual + empleadosMover.length > capacidadDestino) {
+        throw new Error('TARGET_CAPACITY_EXCEEDED: La ruta destino no tiene capacidad para el plan completo.');
+      }
+
+      const asientosDestinoSet = asientosOcupadosComoSet(asientosDestino, asientosPorEmpleadoDestino);
+
+      const pasajerosOrigenFinal = pasajerosOrigen.filter((idEmpleado) => !empleadosMover.includes(idEmpleado));
+      const mapaOrigenFinal = { ...asientosPorEmpleadoOrigen };
+      const asientosRemoverOrigen = new Set();
+
+      const pasajerosDestinoFinal = [...pasajerosDestino];
+      const asientosDestinoFinal = [...asientosDestino];
+      const mapaDestinoFinal = { ...asientosPorEmpleadoDestino };
+      const detalleReasignacion = [];
+
+      empleadosMover.forEach((idEmpleado) => {
+        const asientoOrigen = Number(mapaOrigenFinal[idEmpleado]);
+        if (Number.isInteger(asientoOrigen) && asientoOrigen > 0) {
+          asientosRemoverOrigen.add(asientoOrigen);
+        }
+        delete mapaOrigenFinal[idEmpleado];
+
+        let asientoDestinoAsignado = null;
+        if (
+          Number.isInteger(asientoOrigen)
+          && asientoOrigen > 0
+          && asientoOrigen <= capacidadDestino
+          && !asientosDestinoSet.has(asientoOrigen)
+        ) {
+          asientoDestinoAsignado = asientoOrigen;
+        } else {
+          asientoDestinoAsignado = siguienteAsientoDisponible(asientosDestinoSet, capacidadDestino);
+        }
+
+        asientosDestinoSet.add(asientoDestinoAsignado);
+        pasajerosDestinoFinal.push(idEmpleado);
+        asientosDestinoFinal.push(asientoDestinoAsignado);
+        mapaDestinoFinal[idEmpleado] = asientoDestinoAsignado;
+
+        detalleReasignacion.push({
+          id_empleado: idEmpleado,
+          asiento_origen: Number.isInteger(asientoOrigen) ? asientoOrigen : null,
+          asiento_destino: asientoDestinoAsignado
+        });
+      });
+
+      const asientosOrigenFinal = asientosOrigen.filter((asiento) => !asientosRemoverOrigen.has(asiento));
+
+      t.set(programacionOrigen.docRef, {
+        pasajeros_ids: pasajerosOrigenFinal,
+        asientos_reservados: asientosOrigenFinal,
+        asientos_por_empleado: mapaOrigenFinal,
+        asientos_ocupados: Math.max(pasajerosOrigenFinal.length, asientosOrigenFinal.length),
+        actualizado_en: new Date(),
+        actualizado_por: req.usuario.uid
+      }, { merge: true });
+
+      t.set(programacionDestino.docRef, {
+        fecha: fechaPlan,
+        turno: turnoPlan || dataDestino.turno || null,
+        id_ruta: rutaDestino.id,
+        pasajeros_ids: pasajerosDestinoFinal,
+        asientos_reservados: normalizarAsientosReservados(asientosDestinoFinal),
+        asientos_por_empleado: mapaDestinoFinal,
+        asientos_ocupados: Math.max(pasajerosDestinoFinal.length, asientosDestinoFinal.length),
+        actualizado_en: new Date(),
+        actualizado_por: req.usuario.uid
+      }, { merge: true });
+
+      const creadoEn = new Date();
+      const semanaKey = obtenerSemanaKey(creadoEn);
+      const planPayload = {
+        recomendacion_id: textoNormalizado(recomendacion_id) || null,
+        fecha: fechaPlan,
+        turno: turnoPlan || null,
+        ruta_origen_id: rutaOrigen.id,
+        ruta_destino_id: rutaDestino.id,
+        empleados_movidos: empleadosMover,
+        cantidad_empleados_movidos: empleadosMover.length,
+        motivo: textoNormalizado(motivo) || 'Plan ejecutado por recomendacion IA.',
+        detalle_reasignacion: detalleReasignacion,
+        ejecutado_por: req.usuario.uid,
+        ejecutado_por_rol: req.usuario.rol,
+        ejecutado_en: creadoEn,
+        semana_key: semanaKey
+      };
+
+      t.set(planRef, planPayload);
+
+      const feedbackPayload = {
+        recomendacion_id: textoNormalizado(recomendacion_id) || null,
+        ruta_id: rutaOrigen.id,
+        decision: 'ACEPTADA',
+        tipo_ejemplo: 'POSITIVE',
+        es_negative_example: false,
+        razon: textoNormalizado(motivo) || 'Plan ejecutado por Admin.',
+        ruta_alternativa_sugerida: rutaDestino.id,
+        metadata: {
+          origen: 'api/ai/ejecutar-plan',
+          plan_id: planRef.id,
+          empleados_movidos: empleadosMover.length,
+          fecha: fechaPlan,
+          turno: turnoPlan || null
+        },
+        creado_por: req.usuario.uid,
+        creado_por_rol: req.usuario.rol,
+        creado_en: creadoEn,
+        semana_key: semanaKey
+      };
+
+      t.set(feedbackRef, feedbackPayload);
+
+      const entradaMemoria = {
+        feedback_id: feedbackRef.id,
+        recomendacion_id: textoNormalizado(recomendacion_id) || null,
+        ruta_id: rutaOrigen.id,
+        decision: 'ACEPTADA',
+        tipo_ejemplo: 'POSITIVE',
+        es_negative_example: false,
+        ruta_alternativa_sugerida: rutaDestino.id,
+        razon: textoNormalizado(motivo) || 'Plan ejecutado por Admin.',
+        creado_por: req.usuario.uid,
+        creado_en: creadoEn
+      };
+
+      t.set(db.collection(COLECCION_HISTORICO_RECOMENDACIONES).doc(semanaKey), {
+        semana_key: semanaKey,
+        semana_inicio: obtenerInicioSemana(creadoEn),
+        ...construirIncrementosDecisionSemanal('ACEPTADA'),
+        recomendaciones: admin.firestore.FieldValue.arrayUnion(entradaMemoria),
+        feedback_admin: admin.firestore.FieldValue.arrayUnion(entradaMemoria),
+        ejemplos_positivos: admin.firestore.FieldValue.arrayUnion(entradaMemoria),
+        actualizado_en: creadoEn,
+        actualizado_por: req.usuario.uid
+      }, { merge: true });
+
+      resultado = {
+        plan_id: planRef.id,
+        feedback_id: feedbackRef.id,
+        ruta_origen_id: rutaOrigen.id,
+        ruta_destino_id: rutaDestino.id,
+        fecha: fechaPlan,
+        turno: turnoPlan || null,
+        cantidad_empleados_movidos: empleadosMover.length,
+        detalle_reasignacion: detalleReasignacion
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Plan IA ejecutado correctamente de forma atomica.',
+      data: resultado
+    });
+  } catch (error) {
+    const mensaje = String(error?.message || 'No fue posible ejecutar el plan IA.');
+    const status = mensaje.startsWith('SOURCE_ASSIGNMENT_NOT_FOUND')
+      || mensaje.startsWith('EMPLOYEE_NOT_IN_SOURCE')
+      ? 404
+      : mensaje.startsWith('TARGET_CAPACITY_EXCEEDED')
+        || mensaje.startsWith('DUPLICATE_TARGET_ASSIGNMENT')
+        || mensaje.startsWith('EMPTY_SOURCE_ROUTE')
+        || mensaje.startsWith('EMPTY_MOVE_SET')
+          ? 409
+          : 400;
+
+    console.error('Error ejecutando plan IA:', mensaje);
+    res.status(status).json({
+      success: false,
+      message: mensaje
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 5C: Auditoria de planes IA ejecutados
+// Admin y Jefe pueden consultar historico
+// ==========================================
+app.get('/api/ai/planes-ejecutados', autorizar('insights:ver'), async (req, res) => {
+  const fechaDesde = textoNormalizado(req.query.fecha_desde);
+  const fechaHasta = textoNormalizado(req.query.fecha_hasta);
+  const estadoImpacto = textoNormalizado(req.query.estado_impacto).toLowerCase();
+  const limiteSolicitado = Number(req.query.limit);
+  const limit = Number.isInteger(limiteSolicitado)
+    ? Math.min(Math.max(limiteSolicitado, 1), 200)
+    : 50;
+
+  if (fechaDesde && !/^\d{4}-\d{2}-\d{2}$/.test(fechaDesde)) {
+    return res.status(400).json({
+      success: false,
+      message: 'fecha_desde debe tener formato YYYY-MM-DD.'
+    });
+  }
+
+  if (fechaHasta && !/^\d{4}-\d{2}-\d{2}$/.test(fechaHasta)) {
+    return res.status(400).json({
+      success: false,
+      message: 'fecha_hasta debe tener formato YYYY-MM-DD.'
+    });
+  }
+
+  if (fechaDesde && fechaHasta && fechaDesde > fechaHasta) {
+    return res.status(400).json({
+      success: false,
+      message: 'fecha_desde no puede ser mayor que fecha_hasta.'
+    });
+  }
+
+  if (estadoImpacto && !['alto', 'medio', 'bajo'].includes(estadoImpacto)) {
+    return res.status(400).json({
+      success: false,
+      message: 'estado_impacto invalido. Valores permitidos: alto, medio, bajo.'
+    });
+  }
+
+  try {
+    let query = db.collection(COLECCION_PLANES_IA);
+
+    if (fechaDesde) {
+      query = query.where('fecha', '>=', fechaDesde);
+    }
+
+    if (fechaHasta) {
+      query = query.where('fecha', '<=', fechaHasta);
+    }
+
+    query = query.orderBy('fecha', 'desc').limit(limit);
+
+    const snapshot = await query.get();
+
+    const planes = snapshot.docs.map((doc) => {
+      const data = doc.data() || {};
+      const cantidadEmpleadosMovidos = Number(data.cantidad_empleados_movidos)
+        || (Array.isArray(data.empleados_movidos) ? data.empleados_movidos.length : 0);
+
+      return {
+        id: doc.id,
+        recomendacion_id: textoNormalizado(data.recomendacion_id) || null,
+        fecha: textoNormalizado(data.fecha) || null,
+        turno: textoNormalizado(data.turno) || null,
+        ruta_origen_id: textoNormalizado(data.ruta_origen_id) || null,
+        ruta_destino_id: textoNormalizado(data.ruta_destino_id) || null,
+        cantidad_empleados_movidos: cantidadEmpleadosMovidos,
+        estado_impacto: calcularEstadoImpactoPlan(cantidadEmpleadosMovidos),
+        motivo: textoNormalizado(data.motivo) || null,
+        detalle_reasignacion: Array.isArray(data.detalle_reasignacion) ? data.detalle_reasignacion : [],
+        ejecutado_por: textoNormalizado(data.ejecutado_por) || null,
+        ejecutado_por_rol: textoNormalizado(data.ejecutado_por_rol) || null,
+        ejecutado_en: serializarFechaFirestore(data.ejecutado_en),
+        semana_key: textoNormalizado(data.semana_key) || null
+      };
+    });
+
+    const planesFiltrados = estadoImpacto
+      ? planes.filter((plan) => plan.estado_impacto === estadoImpacto)
+      : planes;
+
+    const resumen = {
+      total_planes: planesFiltrados.length,
+      total_empleados_movidos: planesFiltrados.reduce(
+        (acumulado, plan) => acumulado + Number(plan.cantidad_empleados_movidos || 0),
+        0
+      ),
+      impacto_alto: planesFiltrados.filter((plan) => plan.estado_impacto === 'alto').length,
+      impacto_medio: planesFiltrados.filter((plan) => plan.estado_impacto === 'medio').length,
+      impacto_bajo: planesFiltrados.filter((plan) => plan.estado_impacto === 'bajo').length
+    };
+
+    res.status(200).json({
+      success: true,
+      filtros_aplicados: {
+        fecha_desde: fechaDesde || null,
+        fecha_hasta: fechaHasta || null,
+        estado_impacto: estadoImpacto || null,
+        limit
+      },
+      resumen,
+      data: planesFiltrados
+    });
+  } catch (error) {
+    console.error('Error consultando planes IA ejecutados:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'No fue posible consultar el historico de planes IA ejecutados.'
     });
   }
 });

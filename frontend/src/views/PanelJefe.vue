@@ -156,6 +156,61 @@
     <section class="crud-section">
       <EmpleadoCrudPanel />
     </section>
+
+    <section class="assignment-overview-section">
+      <div class="section-card">
+        <div class="assignment-header">
+          <h3>Asignación Actual por Empleado</h3>
+          <p class="subtitle">Vista del día {{ registro.dia }} y turno {{ TURNOS_LABEL[registro.horario] || registro.horario }}.</p>
+        </div>
+
+        <div v-if="cargandoContexto" class="status-info">Preparando asignaciones actuales...</div>
+        <div v-else-if="!empleadosAsignados.length" class="status-info">
+          No hay empleados activos asignados a tu turno.
+        </div>
+        <div v-else class="assignment-table-wrap">
+          <table class="assignment-table">
+            <thead>
+              <tr>
+                <th>ID Empleado</th>
+                <th>Nombre</th>
+                <th>Ruta actual</th>
+                <th>Asiento</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="fila in empleadosConAsignacion" :key="fila.uid">
+                <td>{{ fila.id_empleado }}</td>
+                <td>{{ fila.nombre }}</td>
+                <td>
+                  {{ fila.asignacion ? construirEtiquetaRuta(fila.asignacion.ruta) : 'Sin asignar' }}
+                </td>
+                <td>{{ fila.asignacion?.asiento ?? '-' }}</td>
+                <td class="assignment-actions">
+                  <button
+                    class="btn-mini"
+                    type="button"
+                    @click="prepararCambioRutaDesdeTabla(fila.id_empleado, fila.asignacion?.ruta.id || null)"
+                  >
+                    {{ fila.asignacion ? 'Cambiar ruta' : 'Asignar ruta' }}
+                  </button>
+                  <button
+                    v-if="fila.asignacion"
+                    class="btn-mini danger"
+                    type="button"
+                    :disabled="procesandoLiberacionEmpleado === fila.id_empleado"
+                    @click="liberarAsignacionDesdeTabla(fila)"
+                  >
+                    {{ procesandoLiberacionEmpleado === fila.id_empleado ? 'Liberando...' : 'Desasignar' }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -198,6 +253,15 @@ interface ModalDesasignacionDetalle {
   turno: string;
 }
 
+interface AsignacionDetectada {
+  ruta: Ruta;
+  asiento: number | null;
+}
+
+interface FilaEmpleadoAsignacion extends EmpleadoAsignado {
+  asignacion: AsignacionDetectada | null;
+}
+
 const TURNOS_LABEL: Record<string, string> = {
   mixto_1: 'Mixto 1',
   mixto_2: 'Mixto 2',
@@ -228,6 +292,7 @@ const aviso = ref<string | null>(null)
 const error = ref<string | null>(null)
 const mensaje = ref<string | null>(null)
 const errorModalDesasignacion = ref<string | null>(null)
+const procesandoLiberacionEmpleado = ref<string | null>(null)
 const modalDesasignacion = ref({
   visible: false,
   procesando: false,
@@ -271,6 +336,13 @@ const resumenRutasTurno = computed(() => {
 
 const rutaSeleccionada = computed(() => {
   return rutasParaTurno.value.find((ruta) => ruta.id === registro.value.ruta) || null
+})
+
+const empleadosConAsignacion = computed<FilaEmpleadoAsignacion[]>(() => {
+  return empleadosAsignados.value.map((empleado) => ({
+    ...empleado,
+    asignacion: detectarAsignacionEmpleado(empleado.id_empleado),
+  }))
 })
 
 const asientosLibres = computed(() => {
@@ -423,6 +495,44 @@ async function cargarRutasDeDB() {
 
 function obtenerEmpleadoPorId(idEmpleado: string) {
   return empleadosCatalogo.value.find((empleado) => empleado.id_empleado === idEmpleado) || null
+}
+
+function obtenerAsientoEmpleadoEnRuta(ruta: Ruta, idEmpleado: string): number | null {
+  const asientosPorEmpleado = ruta.asientos_por_empleado || {}
+  const asientoDesdeMapa = Number(asientosPorEmpleado[idEmpleado])
+  if (Number.isInteger(asientoDesdeMapa) && asientoDesdeMapa > 0) {
+    return asientoDesdeMapa
+  }
+
+  const pasajeros = Array.isArray(ruta.pasajeros_ids) ? ruta.pasajeros_ids : []
+  const asientos = Array.isArray(ruta.asientos_reservados) ? ruta.asientos_reservados : []
+  if (!pasajeros.length || !asientos.length || pasajeros.length !== asientos.length) {
+    return null
+  }
+
+  const indice = pasajeros.findIndex((id) => id === idEmpleado)
+  if (indice < 0) {
+    return null
+  }
+
+  const asiento = Number(asientos[indice])
+  return Number.isInteger(asiento) && asiento > 0 ? asiento : null
+}
+
+function detectarAsignacionEmpleado(idEmpleado: string): AsignacionDetectada | null {
+  for (const ruta of rutasParaTurno.value) {
+    const pasajeros = Array.isArray(ruta.pasajeros_ids) ? ruta.pasajeros_ids : []
+    const asientosPorEmpleado = ruta.asientos_por_empleado || {}
+
+    if (pasajeros.includes(idEmpleado) || Object.prototype.hasOwnProperty.call(asientosPorEmpleado, idEmpleado)) {
+      return {
+        ruta,
+        asiento: obtenerAsientoEmpleadoEnRuta(ruta, idEmpleado),
+      }
+    }
+  }
+
+  return null
 }
 
 function obtenerIdEmpleadoEnAsiento(ruta: Ruta, asiento: number) {
@@ -583,6 +693,70 @@ const confirmarDesasignacion = async () => {
   }
 }
 
+function prepararCambioRutaDesdeTabla(idEmpleado: string, rutaId: string | null) {
+  registro.value.idEmpleado = idEmpleado
+  registro.value.ruta = rutaId || rutaRecomendada.value?.id || rutasParaTurno.value[0]?.id || ''
+  registro.value.asiento = null
+  mensaje.value = `Empleado ${idEmpleado} seleccionado. Elige asiento para confirmar la asignación.`
+  error.value = null
+}
+
+async function liberarAsignacionDesdeTabla(fila: FilaEmpleadoAsignacion) {
+  if (!fila.asignacion) {
+    return
+  }
+
+  const ruta = fila.asignacion.ruta
+  const asientoNumero = Number(fila.asignacion.asiento)
+
+  if (!Number.isInteger(asientoNumero) || asientoNumero <= 0) {
+    error.value = 'No se pudo determinar el asiento asignado para este empleado.'
+    return
+  }
+
+  const confirmar = window.confirm(
+    `¿Deseas desasignar a ${fila.nombre} de la Ruta ${ruta.ruta} (asiento ${asientoNumero})?`,
+  )
+
+  if (!confirmar) {
+    return
+  }
+
+  procesandoLiberacionEmpleado.value = fila.id_empleado
+  error.value = null
+  mensaje.value = null
+
+  try {
+    const headers = await obtenerHeadersSeguros()
+    const respuesta = await fetch(`${API_BASE_URL}/api/asignar/cancelar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify({
+        id_empleado: fila.id_empleado,
+        id_ruta: ruta.id,
+        fecha: registro.value.dia,
+        turno: registro.value.horario,
+        asiento: asientoNumero,
+      }),
+    })
+
+    const payload = await respuesta.json().catch(() => ({}))
+    if (!respuesta.ok) {
+      throw new Error(payload?.message || 'No se pudo eliminar la asignación del empleado.')
+    }
+
+    mensaje.value = `Asignación eliminada para ${fila.id_empleado} (Ruta ${ruta.ruta}, asiento ${asientoNumero}).`
+    await cargarRutasDeDB()
+  } catch (err: any) {
+    error.value = err.message || 'No se pudo eliminar la asignación.'
+  } finally {
+    procesandoLiberacionEmpleado.value = null
+  }
+}
+
 const salir = () => {
   logout().finally(() => router.push('/login'))
 }
@@ -680,6 +854,51 @@ label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; mar
 .status-ok { margin-top: 1rem; color: #166534; font-weight: 600; }
 .status-error { margin-top: 1rem; color: #b91c1c; font-weight: 600; }
 .crud-section { padding: 0 3rem 2.5rem; }
+
+.assignment-overview-section { padding: 0 3rem 2.5rem; }
+.assignment-header { margin-bottom: 1rem; }
+.assignment-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
+.assignment-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  min-width: 720px;
+}
+.assignment-table thead th {
+  text-align: left;
+  padding: 0.8rem;
+  background: #f8fafc;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+.assignment-table tbody td {
+  padding: 0.8rem;
+  border-top: 1px solid #e2e8f0;
+  color: #1f2937;
+}
+.assignment-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.btn-mini {
+  background: #0f172a;
+  color: #fff;
+  border: 1px solid #0f172a;
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.btn-mini:hover { background: #1e293b; }
+.btn-mini.danger {
+  background: #fff;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+.btn-mini.danger:hover { background: #fef2f2; }
 
 .modal-overlay {
   position: fixed;
