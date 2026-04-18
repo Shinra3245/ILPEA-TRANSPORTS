@@ -25,14 +25,38 @@
       <div v-else>
         <!-- Sección de Gráficos -->
         <div class="charts-section">
+          <div class="charts-filter">
+            <label for="chart-select">Ver gráfico:</label>
+            <select id="chart-select" v-model="selectedChart">
+              <option value="todos">Todos</option>
+              <option value="ocupacion">Ocupación</option>
+              <option value="capacidad">Capacidad</option>
+              <option value="alertas">Alertas</option>
+            </select>
+          </div>
+
           <div class="charts-grid">
-            <div class="chart-item" id="chart-ocupacion">
+            <div
+              v-if="selectedChart === 'todos' || selectedChart === 'ocupacion'"
+              class="chart-item"
+              id="chart-ocupacion"
+            >
               <ChartOcupacion :rutas="rutas" />
             </div>
-            <div class="chart-item" id="chart-capacidad">
+
+            <div
+              v-if="selectedChart === 'todos' || selectedChart === 'capacidad'"
+              class="chart-item"
+              id="chart-capacidad"
+            >
               <ChartCapacidad :rutas="rutas" />
             </div>
-            <div class="chart-item chart-item-small" id="chart-alertas">
+
+            <div
+              v-if="selectedChart === 'todos' || selectedChart === 'alertas'"
+              class="chart-item chart-item-small"
+              id="chart-alertas"
+            >
               <ChartAlertas :rutas="rutas" />
             </div>
           </div>
@@ -126,6 +150,7 @@ interface Ruta {
 const rutas = ref<Ruta[]>([]);
 const cargando = ref<boolean>(true);
 const error = ref<string | null>(null);
+const selectedChart = ref<string>('todos');
 
 // 3. Función para consumir la API de Node.js
 const obtenerRutas = async () => {
@@ -264,6 +289,29 @@ onMounted(() => {
 /* Formato Condicional (Reglas de Negocio) */
 .fila-peligro {
   background-color: #fef2f2;
+}
+
+.charts-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.charts-filter label {
+  font-weight: 600;
+  color: #334155;
+}
+
+.charts-filter select {
+  min-width: 220px;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.75rem;
+  border: 1px solid #cbd5e1;
+  background: white;
+  color: #0f172a;
+  outline: none;
 }
 
 /* Barra de Ocupación */
