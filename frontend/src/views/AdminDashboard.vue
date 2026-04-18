@@ -60,7 +60,7 @@
       <div v-if="cargando" class="status-box">Sincronizando con Backend...</div>
       <div v-else-if="error" class="status-box error-msg">
         <p>⚠️ {{ error }}</p>
-        <button @click="obtenerRutas" class="btn-retry">Reintentar Conexión</button>
+        <button @click="recargarRutasSegunFiltro" class="btn-retry">Reintentar Conexión</button>
       </div>
 
       <div v-else class="dashboard-visuals">
@@ -221,7 +221,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { useAuth } from '../composables/useAuth';
 import { useRouter } from 'vue-router';
 // Importamos ExcelJS y FileSaver
@@ -240,12 +240,15 @@ interface Ruta {
   ruta: number;
   "tipo de unidad": string;
   capacidad_real: number;
+  capacidad_limite?: number;
+  asientos_ocupados?: number;
   max_pasajeros_dia: number;
   porcentaje_ocupacion_max: number;
   alerta_ocupacion: string;
   sugerencia_right_sizing: string;
   fecha_operacion: string | null;
   semana_operacion: number | null;
+  programada?: boolean;
 }
 
 interface PlanIA {
@@ -322,18 +325,31 @@ const normalizarFechaISO = (valor: unknown): string | null => {
 
 filtroSemana.value = obtenerNumeroSemana(new Date());
 
-const normalizarRuta = (ruta: RutaApi): Ruta => ({
+const normalizarRuta = (ruta: RutaApi): Ruta => {
+  const capacidadLimite = numeroSeguro(ruta.capacidad_limite, 0);
+  const asientosOcupados = numeroSeguro(ruta.asientos_ocupados, 0);
+
+  // Si viene información de programación diaria, priorizamos ocupación real del día.
+  const ocupacionCalculada = capacidadLimite > 0
+    ? (asientosOcupados / capacidadLimite) * 100
+    : numeroSeguro(ruta.porcentaje_ocupacion_max, 0);
+
+  return {
   id: String(ruta.id ?? ''),
   ruta: numeroSeguro(ruta.ruta, 0),
   'tipo de unidad': String(ruta['tipo de unidad'] ?? 'N/D'),
   capacidad_real: numeroSeguro(ruta.capacidad_real, 0),
+  capacidad_limite: capacidadLimite > 0 ? capacidadLimite : undefined,
+  asientos_ocupados: capacidadLimite > 0 ? asientosOcupados : undefined,
   max_pasajeros_dia: numeroSeguro(ruta.max_pasajeros_dia, 0),
-  porcentaje_ocupacion_max: numeroSeguro(ruta.porcentaje_ocupacion_max, 0),
+  porcentaje_ocupacion_max: ocupacionCalculada,
   alerta_ocupacion: String(ruta.alerta_ocupacion ?? 'N/D'),
   sugerencia_right_sizing: String(ruta.sugerencia_right_sizing ?? 'Sin sugerencia'),
   fecha_operacion: normalizarFechaISO(ruta.fecha_operacion ?? ruta.fecha ?? ruta.dia),
-  semana_operacion: numeroSeguro(ruta.semana_operacion ?? ruta.semana ?? ruta.week, 0) || null
-});
+  semana_operacion: numeroSeguro(ruta.semana_operacion ?? ruta.semana ?? ruta.week, 0) || null,
+  programada: typeof ruta.programada === 'boolean' ? ruta.programada : undefined
+  };
+};
 
 const obtenerOcupacionSegura = (ruta: Ruta): number => numeroSeguro(ruta.porcentaje_ocupacion_max, 0);
 const formatearOcupacion = (ruta: Ruta): string => obtenerOcupacionSegura(ruta).toFixed(1);
@@ -351,7 +367,16 @@ const rutasFiltradas = computed(() => {
     if (!cumpleOcupacion) return false;
 
     if (filtroPeriodo.value === 'dia') {
-      return !!ruta.fecha_operacion && ruta.fecha_operacion === filtroDia.value;
+      const coincideDia = !!ruta.fecha_operacion && ruta.fecha_operacion === filtroDia.value;
+      if (!coincideDia) return false;
+
+      // En el endpoint de programadas llega todo el catálogo con bandera "programada".
+      // Si existe la bandera, solo mostramos las rutas efectivamente programadas.
+      if (typeof ruta.programada === 'boolean') {
+        return ruta.programada;
+      }
+
+      return true;
     }
 
     if (filtroPeriodo.value === 'semana') {
@@ -390,6 +415,50 @@ const obtenerRutas = async () => {
     cargando.value = false;
   }
 };
+
+const obtenerRutasProgramadasPorDia = async (fecha: string) => {
+  cargando.value = true;
+  error.value = null;
+
+  try {
+    const headers = await authHeaders();
+    const params = new URLSearchParams({ fecha });
+    const respuesta = await fetch(`${API_BASE_URL}/api/rutas/programadas?${params.toString()}`, { headers });
+    if (!respuesta.ok) throw new Error(`Error ${respuesta.status}`);
+    const json = await respuesta.json();
+    const data = Array.isArray(json?.data) ? json.data : [];
+    rutas.value = data
+      .map((ruta: RutaApi) => normalizarRuta(ruta))
+      .sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
+  } catch (err: any) {
+    error.value = err.message || 'Error al cargar rutas programadas por día.';
+  } finally {
+    cargando.value = false;
+  }
+};
+
+const recargarRutasSegunFiltro = async () => {
+  if (filtroPeriodo.value === 'dia') {
+    await obtenerRutasProgramadasPorDia(filtroDia.value);
+    return;
+  }
+
+  await obtenerRutas();
+};
+
+watch(
+  () => [filtroPeriodo.value, filtroDia.value],
+  async ([periodoActual], [periodoAnterior]) => {
+    if (periodoActual === 'dia') {
+      await obtenerRutasProgramadasPorDia(filtroDia.value);
+      return;
+    }
+
+    if (periodoAnterior === 'dia' && periodoActual !== 'dia') {
+      await obtenerRutas();
+    }
+  }
+);
 
 const obtenerPlanesIA = async () => {
   cargandoPlanes.value = true;

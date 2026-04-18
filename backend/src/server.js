@@ -462,7 +462,10 @@ async function resolverRutaPorIdentificador(idRuta, transaction = null) {
 }
 
 async function resolverProgramacion(fecha, idRuta, turno, transaction = null) {
-  const idsProgramacion = construirIdsProgramacion(fecha, idRuta, turno);
+  const fechaTexto = textoNormalizado(fecha);
+  const idRutaTexto = textoNormalizado(idRuta);
+  const turnoTexto = turnoNormalizado(turno);
+  const idsProgramacion = construirIdsProgramacion(fechaTexto, idRutaTexto, turnoTexto);
 
   for (const programacionId of idsProgramacion) {
     const ref = db.collection('programacion_diaria').doc(programacionId);
@@ -471,6 +474,25 @@ async function resolverProgramacion(fecha, idRuta, turno, transaction = null) {
       return {
         docId: programacionId,
         docRef: ref,
+        data: doc.data() || {}
+      };
+    }
+  }
+
+  // Si no se especifica turno, buscamos cualquier programación existente
+  // para esa fecha y ruta sin depender del formato del docId.
+  if (!turnoTexto && fechaTexto && idRutaTexto) {
+    const query = db.collection('programacion_diaria')
+      .where('fecha', '==', fechaTexto)
+      .where('id_ruta', '==', idRutaTexto)
+      .limit(1);
+
+    const snapshot = await leerQuery(query, transaction);
+    if (!snapshot.empty) {
+      const doc = snapshot.docs[0];
+      return {
+        docId: doc.id,
+        docRef: doc.ref,
         data: doc.data() || {}
       };
     }
