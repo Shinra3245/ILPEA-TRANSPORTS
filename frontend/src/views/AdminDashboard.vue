@@ -106,6 +106,26 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import { useAuth } from '../composables/useAuth';
+
+// 1. Definición del Modelo de Datos (TypeScript)
+interface Ruta {
+  id: string;
+  ruta: number;
+  "tipo de unidad": string;
+  capacidad_real: number;
+  max_pasajeros_dia: number;
+  porcentaje_ocupacion_max: number;
+  alerta_ocupacion: string;
+  sugerencia_right_sizing: string;
+}
+
+// 2. Variables Reactivas
+const rutas = ref<Ruta[]>([]);
+const cargando = ref<boolean>(true);
+const error = ref<string | null>(null);
+const { authHeaders } = useAuth();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 import { useRouter } from 'vue-router';
 // Componentes Core
 import RecomendacionesIA from '../components/RecomendacionesIA.vue';
@@ -123,6 +143,20 @@ const selectedChart = ref<string>('todos');
 
 const obtenerRutas = async () => {
   try {
+    const headers = await authHeaders();
+    const respuesta = await fetch(`${API_BASE_URL}/api/rutas`, { headers });
+    
+    if (!respuesta.ok) throw new Error('Error al conectar con el servidor');
+    
+    const json = await respuesta.json();
+    
+    // Asignamos la data cruda a nuestra variable reactiva
+    // Ordenamos las rutas numéricamente para mejor lectura
+    rutas.value = json.data.sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
+    
+  } catch (err) {
+    error.value = 'No se pudieron cargar las rutas. Verifica sesion y backend.';
+    console.error(err);
     cargando.value = true;
     error.value = null;
     const res = await fetch('http://localhost:3000/api/rutas');

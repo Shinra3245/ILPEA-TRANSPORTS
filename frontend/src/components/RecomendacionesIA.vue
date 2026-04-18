@@ -17,14 +17,25 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import { useAuth } from '../composables/useAuth';
 
-const insights = ref([]);
+interface Insight {
+  titulo: string;
+  descripcion: string;
+  prioridad: 'alta' | 'media' | 'baja';
+  ruta_id?: string;
+}
+
+const insights = ref<Insight[]>([]);
 const cargando = ref(true);
 const error = ref('');
+const { authHeaders } = useAuth();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 onMounted(async () => {
   try {
-    const res = await fetch('http://localhost:3000/api/insights-automaticos');
+    const headers = await authHeaders();
+    const res = await fetch(`${API_BASE_URL}/api/insights-automaticos`, { headers });
     const data = await res.json();
 
     if (!res.ok || !data.success) {

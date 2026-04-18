@@ -105,8 +105,12 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
+// Importamos el nuevo componente del chatbot
+import CopilotoChat from '../components/CopilotoChat.vue'
+import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
+const { logout } = useAuth()
 
 // 1. Estado Reactivo
 const registro = ref({
@@ -177,6 +181,8 @@ const confirmarAsignacion = () => {
   }
 }
 
+const cerrarSesion = async () => {
+  await logout()
 const salir = () => {
   localStorage.removeItem('userRole')
   router.push('/login')

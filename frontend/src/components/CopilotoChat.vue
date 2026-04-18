@@ -38,6 +38,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
+import { useAuth } from '../composables/useAuth';
 
 interface Mensaje {
   role: 'user' | 'bot';
@@ -50,6 +51,8 @@ const historial = ref<Mensaje[]>([
   { role: 'bot', text: '¡Hola! Soy tu Copiloto Logístico. ¿En qué puedo ayudarte con las rutas hoy?' }
 ]);
 const cargando = ref(false);
+const { authHeaders } = useAuth();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 const enviarMensaje = async () => {
   if (!inputMensaje.value.trim()) return;
@@ -60,9 +63,10 @@ const enviarMensaje = async () => {
   cargando.value = true;
 
   try {
-    const respuesta = await fetch('http://localhost:3000/api/chat', {
+    const headers = await authHeaders();
+    const respuesta = await fetch(`${API_BASE_URL}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({ mensaje_usuario: textoUsuario })
     });
 
