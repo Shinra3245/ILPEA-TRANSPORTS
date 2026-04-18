@@ -60,6 +60,9 @@ PERMISOS = {
 | `/api/rutas/sync` | POST | `rutas:sync` | ADMIN |
 | `/api/chat` | POST | `chat:enviar` | ADMIN, JEFE |
 | `/api/insights-automaticos` | GET | `insights:ver` | ADMIN, JEFE |
+| `/api/ai/feedback` | POST | `insights:ver` | ADMIN *(validacion adicional de rol en backend)* |
+| `/api/ai/ejecutar-plan` | POST | `asignacion:crear` | ADMIN *(validacion adicional de rol en backend)* |
+| `/api/ai/planes-ejecutados` | GET | `insights:ver` | ADMIN, JEFE |
 | `/api/usuarios` | GET | `usuarios:ver` | ADMIN |
 | `/api/usuarios/crear` | POST | `usuarios:crear` | ADMIN |
 | `/api/usuarios/:uid/rol` | PUT | `usuarios:actualizar` | ADMIN |

@@ -70,6 +70,40 @@
           </div>
         </div>
 
+        <section class="ia-block">
+          <h3 class="section-title">Recomendaciones IA</h3>
+          <RecomendacionesIA />
+        </section>
+
+        <section class="ia-block">
+          <div class="section-header-inline">
+            <h3 class="section-title">Planes IA Ejecutados Recientes</h3>
+            <button
+              class="btn-manage"
+              @click="obtenerPlanesIA"
+              :disabled="cargandoPlanes"
+            >
+              {{ cargandoPlanes ? 'Actualizando...' : 'Actualizar' }}
+            </button>
+          </div>
+
+          <div v-if="cargandoPlanes" class="status-box">Cargando planes IA...</div>
+          <div v-else-if="errorPlanes" class="status-box error-msg">{{ errorPlanes }}</div>
+          <div v-else-if="!planesIA.length" class="status-box">No hay planes IA ejecutados para mostrar.</div>
+
+          <div v-else class="planes-grid">
+            <article v-for="plan in planesIA" :key="plan.id" class="plan-card">
+              <div class="plan-card-head">
+                <h4>{{ plan.ruta_origen_id }} -> {{ plan.ruta_destino_id }}</h4>
+                <span :class="['tag', `impact-${plan.estado_impacto}`]">{{ plan.estado_impacto.toUpperCase() }}</span>
+              </div>
+              <p><strong>Fecha:</strong> {{ plan.fecha }} ({{ plan.turno || 'sin turno' }})</p>
+              <p><strong>Movidos:</strong> {{ plan.cantidad_empleados_movidos }} empleados</p>
+              <p><strong>Motivo:</strong> {{ plan.motivo || 'Sin motivo' }}</p>
+            </article>
+          </div>
+        </section>
+
         <div id="tabla-rutas-reporte" class="pdf-wrapper">
           <h3 class="section-title">Detalle Operativo de Rutas</h3>
           <div class="table-card">
@@ -93,11 +127,11 @@
                     <div class="occupancy-cell">
                       <div class="bar-bg">
                         <div class="bar-fill" 
-                             :style="{ width: Math.min(ruta.porcentaje_ocupacion_max, 100) + '%' }"
-                             :class="ruta.porcentaje_ocupacion_max < 40 ? 'low' : 'ok'">
+                             :style="{ width: Math.min(obtenerOcupacionSegura(ruta), 100) + '%' }"
+                             :class="obtenerOcupacionSegura(ruta) < 40 ? 'low' : 'ok'">
                         </div>
                       </div>
-                      <span>{{ ruta.porcentaje_ocupacion_max.toFixed(1) }}%</span>
+                      <span>{{ formatearOcupacion(ruta) }}%</span>
                     </div>
                   </td>
                   <td>
@@ -138,6 +172,19 @@ interface Ruta {
   sugerencia_right_sizing: string;
 }
 
+interface PlanIA {
+  id: string;
+  fecha: string;
+  turno: string | null;
+  ruta_origen_id: string;
+  ruta_destino_id: string;
+  cantidad_empleados_movidos: number;
+  estado_impacto: 'alto' | 'medio' | 'bajo';
+  motivo: string | null;
+}
+
+type RutaApi = Partial<Ruta> & Record<string, unknown>;
+
 const rutas = ref<Ruta[]>([]);
 const cargando = ref(true);
 const error = ref<string | null>(null);
@@ -145,6 +192,28 @@ const { authHeaders } = useAuth();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const router = useRouter();
 const selectedChart = ref<string>('todos');
+const planesIA = ref<PlanIA[]>([]);
+const cargandoPlanes = ref(false);
+const errorPlanes = ref<string | null>(null);
+
+const numeroSeguro = (valor: unknown, fallback = 0): number => {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : fallback;
+};
+
+const normalizarRuta = (ruta: RutaApi): Ruta => ({
+  id: String(ruta.id ?? ''),
+  ruta: numeroSeguro(ruta.ruta, 0),
+  'tipo de unidad': String(ruta['tipo de unidad'] ?? 'N/D'),
+  capacidad_real: numeroSeguro(ruta.capacidad_real, 0),
+  max_pasajeros_dia: numeroSeguro(ruta.max_pasajeros_dia, 0),
+  porcentaje_ocupacion_max: numeroSeguro(ruta.porcentaje_ocupacion_max, 0),
+  alerta_ocupacion: String(ruta.alerta_ocupacion ?? 'N/D'),
+  sugerencia_right_sizing: String(ruta.sugerencia_right_sizing ?? 'Sin sugerencia')
+});
+
+const obtenerOcupacionSegura = (ruta: Ruta): number => numeroSeguro(ruta.porcentaje_ocupacion_max, 0);
+const formatearOcupacion = (ruta: Ruta): string => obtenerOcupacionSegura(ruta).toFixed(1);
 
 const obtenerRutas = async () => {
   cargando.value = true;
@@ -164,12 +233,53 @@ const obtenerRutas = async () => {
     
     const json = await respuesta.json();
     const data = Array.isArray(json?.data) ? json.data : [];
-    rutas.value = data.sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
+    rutas.value = data
+      .map((ruta: RutaApi) => normalizarRuta(ruta))
+      .sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
   } catch (err: any) {
     console.error('Falla en API:', err);
     error.value = err.message || 'No se pudieron cargar las rutas.';
   } finally {
     cargando.value = false;
+  }
+};
+
+const obtenerPlanesIA = async () => {
+  cargandoPlanes.value = true;
+  errorPlanes.value = null;
+
+  try {
+    const headers = await authHeaders();
+    if (!headers.Authorization) {
+      throw new Error('Sesion invalida. Inicia sesion de nuevo.');
+    }
+
+    const respuesta = await fetch(`${API_BASE_URL}/api/ai/planes-ejecutados?limit=6`, { headers });
+    const json = await respuesta.json();
+
+    if (!respuesta.ok || !json?.success) {
+      throw new Error(json?.message || 'No fue posible cargar planes IA ejecutados.');
+    }
+
+    const data = Array.isArray(json?.data) ? json.data : [];
+    planesIA.value = data.map((plan: any) => ({
+      id: String(plan.id ?? ''),
+      fecha: String(plan.fecha ?? ''),
+      turno: plan.turno ? String(plan.turno) : null,
+      ruta_origen_id: String(plan.ruta_origen_id ?? 'N/D'),
+      ruta_destino_id: String(plan.ruta_destino_id ?? 'N/D'),
+      cantidad_empleados_movidos: numeroSeguro(plan.cantidad_empleados_movidos, 0),
+      estado_impacto: (['alto', 'medio', 'bajo'].includes(String(plan.estado_impacto))
+        ? String(plan.estado_impacto)
+        : 'bajo') as 'alto' | 'medio' | 'bajo',
+      motivo: plan.motivo ? String(plan.motivo) : null
+    }));
+  } catch (err: any) {
+    console.error('Falla obteniendo planes IA:', err);
+    errorPlanes.value = err.message || 'No se pudieron cargar planes IA ejecutados.';
+    planesIA.value = [];
+  } finally {
+    cargandoPlanes.value = false;
   }
 };
 
@@ -188,7 +298,7 @@ const exportarTablaExcel = () => {
         `"Ruta ${ruta.ruta}"`,
         `"${ruta['tipo de unidad']}"`,
         ruta.capacidad_real,
-        ruta.porcentaje_ocupacion_max.toFixed(2),
+        obtenerOcupacionSegura(ruta).toFixed(2),
         `"${ruta.sugerencia_right_sizing}"`,
         `"${estadoOperativo}"`
       ].join(','); 
@@ -228,7 +338,10 @@ const cerrarSesion = async () => {
   router.push('/login');
 };
 
-onMounted(obtenerRutas);
+onMounted(() => {
+  obtenerRutas();
+  obtenerPlanesIA();
+});
 </script>
 
 <style scoped>
@@ -304,6 +417,14 @@ onMounted(obtenerRutas);
 .chart-item-small { grid-column: span 1; }
 .section-title { font-size: 1.1rem; margin-bottom: 1rem; color: #333; }
 
+.ia-block { margin-bottom: 2rem; }
+.section-header-inline { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.planes-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+.plan-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 1rem; }
+.plan-card h4 { margin: 0; font-size: 1rem; color: #1f2937; }
+.plan-card p { margin: 0.35rem 0; font-size: 0.88rem; color: #374151; }
+.plan-card-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.75rem; }
+
 .pdf-wrapper { background-color: #ffffff; padding: 1.5rem; border-radius: 8px; }
 .table-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 0; }
 .minimal-table { width: 100%; border-collapse: collapse; }
@@ -321,6 +442,9 @@ onMounted(obtenerRutas);
 .tag { padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
 .tag-ok { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
 .tag-alert { background: #fff1f2; color: #991b1b; border: 1px solid #fecdd3; }
+.impact-alto { background: #fff1f2; color: #991b1b; border: 1px solid #fecdd3; }
+.impact-medio { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+.impact-bajo { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
 
 .status-box { padding: 4rem; text-align: center; color: #888; }
 .error-msg { color: #ef4444; }
