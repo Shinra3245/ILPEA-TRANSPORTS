@@ -5,6 +5,9 @@ const admin = require('firebase-admin');
 const path = require('path');
 const crypto = require('crypto');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+const adminRoutes = require('./routes/admin');
+const app = express();
+
 
 // Importar configuración de RBAC
 const { ROLES, obtenerPermisosDelRol } = require('./config/roles');
@@ -29,7 +32,6 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-const app = express();
 
 function esEmailValido(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
@@ -44,6 +46,15 @@ function generarPasswordTemporal(longitud = 12) {
   }
 
   return resultado;
+}
+
+function formatearValorPorcentaje(valor, decimales = 2) {
+  const numero = Number(valor);
+  if (!Number.isFinite(numero)) {
+    return 'N/D';
+  }
+
+  return numero.toFixed(decimales);
 }
 
 async function generarIdEmpleadoUnico() {
@@ -317,19 +328,17 @@ function construirProgramacionBase({ fecha, idRuta, turno, rutaData, uidCreador 
 }
 
 function crearClienteOpenAI() {
-  if (!process.env.OPENAI_API_KEY) {
-    return null;
-  }
+  if (!process.env.OPENAI_API_KEY) return null;
 
   try {
     const OpenAI = require('openai');
     return new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
-      timeout: 20000,
-      maxRetries: 1
+      timeout: 60000, // 👈 Aumentamos a 60 segundos para mayor estabilidad en OCI
+      maxRetries: 2    // 👈 Permitimos un reintento automático si falla la conexión
     });
   } catch (error) {
-    console.warn('OpenAI deshabilitado: paquete no instalado o error de carga.');
+    console.warn('OpenAI deshabilitado: error de carga.');
     return null;
   }
 }
@@ -363,7 +372,9 @@ function generarRespuestaFallback(mensajeUsuario, rutas) {
 
   if (consulta.includes('critica') || consulta.includes('cancel') || consulta.includes('40')) {
     if (!rutasCriticas.length) return 'No hay rutas en condición crítica (< 40%) con la data actual.';
-    const listado = rutasCriticas.map((r) => `Ruta ${r.ruta} (${r.porcentaje_ocupacion_max}%)`).join(', ');
+    const listado = rutasCriticas
+      .map((r) => `Ruta ${r.ruta} (${formatearValorPorcentaje(r.porcentaje_ocupacion_max)}%)`)
+      .join(', ');
     return `Rutas críticas detectadas: ${listado}. Recomiendo revisión operativa inmediata.`;
   }
 
@@ -374,6 +385,227 @@ function generarRespuestaFallback(mensajeUsuario, rutas) {
   }
 
   return `Resumen rápido: ${totalRutas} rutas analizadas, ${rutasCriticas.length} con ocupación menor a 40% y ${rutasRightSizing.length} candidatas a right-sizing.`;
+}
+
+function formatearValorPorcentaje(valor, decimales = 2) {
+  const numero = Number(valor);
+  if (!Number.isFinite(numero)) {
+    return 'N/D';
+  }
+
+  return numero.toFixed(decimales);
+}
+
+function fechaISOHoy() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function construirResumenOperativoChat(rutas, limite = 8) {
+  const listado = Array.isArray(rutas) ? rutas : [];
+  const totalRutas = listado.length;
+
+  if (!totalRutas) {
+    return {
+      total_rutas: 0,
+      ocupacion_promedio: 'N/D',
+      rutas_criticas: [],
+      rutas_right_sizing: []
+    };
+  }
+
+  const rutasConOcupacion = listado
+    .map((ruta) => {
+      const ocupacion = Number(ruta.porcentaje_ocupacion_max);
+      return {
+        id: ruta.id || null,
+        ruta: ruta.ruta ?? ruta.id ?? 'N/D',
+        zona: ruta['ruta nombre'] || ruta.nombre_ruta || ruta.nombre || null,
+        ocupacion: Number.isFinite(ocupacion) ? ocupacion : null,
+        pasajeros: Number(ruta.max_pasajeros_dia),
+        tipo_unidad: textoNormalizado(ruta['tipo de unidad'] || ruta.tipo_unidad)
+      };
+    })
+    .filter((ruta) => Number.isFinite(ruta.ocupacion));
+
+  const sumaOcupacion = rutasConOcupacion.reduce((acum, ruta) => acum + Number(ruta.ocupacion), 0);
+  const promedio = rutasConOcupacion.length
+    ? formatearValorPorcentaje(sumaOcupacion / rutasConOcupacion.length)
+    : 'N/D';
+
+  const rutasCriticas = rutasConOcupacion
+    .filter((ruta) => Number(ruta.ocupacion) < 40)
+    .sort((a, b) => Number(a.ocupacion) - Number(b.ocupacion))
+    .slice(0, limite)
+    .map((ruta) => ({
+      ruta: ruta.ruta,
+      zona: ruta.zona,
+      ocupacion: `${formatearValorPorcentaje(ruta.ocupacion)}%`
+    }));
+
+  const rutasRightSizing = rutasConOcupacion
+    .filter(
+      (ruta) =>
+        String(ruta.tipo_unidad || '').toLowerCase().includes('autobus')
+        && Number.isFinite(ruta.pasajeros)
+        && Number(ruta.pasajeros) <= 12
+    )
+    .sort((a, b) => Number(a.pasajeros) - Number(b.pasajeros))
+    .slice(0, limite)
+    .map((ruta) => ({
+      ruta: ruta.ruta,
+      zona: ruta.zona,
+      pasajeros: Number(ruta.pasajeros)
+    }));
+
+  return {
+    total_rutas: totalRutas,
+    ocupacion_promedio: `${promedio}%`,
+    rutas_criticas: rutasCriticas,
+    rutas_right_sizing: rutasRightSizing
+  };
+}
+
+async function obtenerContextoEmpleadosChat(usuario, limite = 20) {
+  if (!usuario || !usuario.rol) {
+    return {
+      total: 0,
+      activos: 0,
+      muestra: []
+    };
+  }
+
+  try {
+    let consulta;
+
+    if (usuario.rol === ROLES.JEFE) {
+      consulta = db.collection('usuarios')
+        .where('rol', '==', ROLES.EMPLEADO)
+        .where('jefe_uid', '==', usuario.uid)
+        .limit(limite);
+    } else {
+      consulta = db.collection('usuarios')
+        .where('rol', '==', ROLES.EMPLEADO)
+        .limit(limite);
+    }
+
+    const snapshot = await consulta.get();
+    const muestra = [];
+    let activos = 0;
+
+    snapshot.forEach((doc) => {
+      const data = doc.data() || {};
+      const activo = data.activo !== false;
+      if (activo) {
+        activos += 1;
+      }
+
+      muestra.push({
+        id_empleado: textoNormalizado(data.id_empleado) || construirIdEmpleadoDesdeUid(doc.id),
+        nombre: textoNormalizado(data.nombre) || null,
+        activo,
+        turno: textoNormalizado(data.turno) || null,
+        jefe_uid: textoNormalizado(data.jefe_uid) || null
+      });
+    });
+
+    return {
+      total: snapshot.size,
+      activos,
+      muestra
+    };
+  } catch (error) {
+    console.warn('No se pudo construir contexto de empleados para chat:', error.message);
+    return {
+      total: 0,
+      activos: 0,
+      muestra: []
+    };
+  }
+}
+
+async function obtenerPlanesIARecientesChat(limite = 8) {
+  try {
+    let snapshot;
+
+    try {
+      snapshot = await db
+        .collection(COLECCION_PLANES_IA)
+        .orderBy('creado_en', 'desc')
+        .limit(limite)
+        .get();
+    } catch (errorOrden) {
+      snapshot = await db.collection(COLECCION_PLANES_IA).limit(limite).get();
+    }
+
+    const planes = [];
+    snapshot.forEach((doc) => {
+      const data = doc.data() || {};
+      planes.push({
+        id: doc.id,
+        fecha: textoNormalizado(data.fecha) || null,
+        turno: textoNormalizado(data.turno) || null,
+        ruta_origen_id: textoNormalizado(data.ruta_origen_id) || null,
+        ruta_destino_id: textoNormalizado(data.ruta_destino_id) || null,
+        cantidad_empleados_movidos: Number(data.cantidad_empleados_movidos) || 0,
+        estado_impacto: textoNormalizado(data.estado_impacto) || null,
+        motivo: textoNormalizado(data.motivo) || null
+      });
+    });
+
+    return planes;
+  } catch (error) {
+    console.warn('No se pudo obtener planes IA para chat:', error.message);
+    return [];
+  }
+}
+
+async function obtenerResumenProgramacionChat({ fecha, turno, limite = 10 } = {}) {
+  const fechaTexto = textoNormalizado(fecha);
+  const turnoTexto = turnoNormalizado(turno);
+
+  if (!fechaTexto) {
+    return {
+      fecha: null,
+      turno: turnoTexto || null,
+      total_programadas: 0,
+      muestra: []
+    };
+  }
+
+  try {
+    let query = db.collection('programacion_diaria').where('fecha', '==', fechaTexto);
+    if (turnoTexto) {
+      query = query.where('turno', '==', turnoTexto);
+    }
+
+    const snapshot = await query.limit(limite).get();
+    const muestra = [];
+
+    snapshot.forEach((doc) => {
+      const data = doc.data() || {};
+      muestra.push({
+        id_ruta: textoNormalizado(data.id_ruta) || null,
+        turno: textoNormalizado(data.turno) || null,
+        asientos_ocupados: Number(data.asientos_ocupados) || 0,
+        capacidad_limite: Number(data.capacidad_limite) || 0
+      });
+    });
+
+    return {
+      fecha: fechaTexto,
+      turno: turnoTexto || null,
+      total_programadas: snapshot.size,
+      muestra
+    };
+  } catch (error) {
+    console.warn('No se pudo construir resumen de programacion para chat:', error.message);
+    return {
+      fecha: fechaTexto,
+      turno: turnoTexto || null,
+      total_programadas: 0,
+      muestra: []
+    };
+  }
 }
 
 function generarInsightsLocales(rutas) {
@@ -391,7 +623,7 @@ function generarInsightsLocales(rutas) {
       insights.push({
         recomendacion_id: crearIdRecomendacion(rutaId, insights.length),
         titulo: `Cancelar Ruta - ${nombreRuta}`,
-        descripcion: `La ruta ${nombreRuta} tiene una ocupación del ${ocupacion}%, menor al 40%.`,
+        descripcion: `La ruta ${nombreRuta} tiene una ocupación del ${formatearValorPorcentaje(ocupacion)}%, menor al 40%.`,
         prioridad: 'alta',
         ruta_id: rutaId,
         prob_cancelacion: probabilidadCancelacion,
@@ -641,7 +873,7 @@ function formatearPorcentaje(fraccion) {
     return 'N/D';
   }
 
-  return `${Math.round(fraccion * 100)}%`;
+  return `${(fraccion * 100).toFixed(2)}%`;
 }
 
 function construirResumenDecisiones(decisiones, limite = 4) {
@@ -850,22 +1082,26 @@ function siguienteAsientoDisponible(asientosOcupados, capacidadMaxima) {
 // Middlewares Globales
 app.use(cors());
 app.use(express.json()); // Permite recibir datos en formato JSON
+app.use('/api', adminRoutes);
 
+app.get('/api/test-ilpea', (req, res) => {
+  res.json({ message: "El prefijo /api funciona correctamente" });
+});
 // Middleware de autenticación (simulado para desarrollo - cambiar en producción)
 // Por defecto usa Firebase Auth real. Para pruebas locales: AUTH_MODE=simulated
 app.use((req, res, next) => {
-  // Saltar autenticación para /api/auth/login (permitir acceso público)
-  if (req.path === '/api/auth/login') {
-    return next();
-  }
+  if (req.path === '/api/auth/login') return next();
 
   const modoAuth = (process.env.AUTH_MODE || 'firebase').toLowerCase();
   if (modoAuth === 'simulated') {
     return autenticarSimulado(req, res, next);
   }
-
   return autenticar(req, res, next);
 });
+
+
+app.use('/api', adminRoutes);
+
 
 // Middleware de logging/auditoría
 app.use(registrarAccion('acciones'));
@@ -887,7 +1123,7 @@ app.get('/api/rutas', autorizar('rutas:ver'), async (req, res) => {
   try {
     const rutasSnapshot = await db.collection('rutas').get();
     const rutas = [];
-    
+
     rutasSnapshot.forEach(doc => {
       rutas.push({ id: doc.id, ...doc.data() });
     });
@@ -1239,23 +1475,23 @@ app.post('/api/rutas/sync', autorizar('rutas:sync'), async (req, res) => {
       message: 'El payload debe ser un arreglo de rutas.'
     });
   }
-  
+
   try {
     const batch = db.batch(); // Usamos batch para escribir todo de una sola vez
-    
+
     rutasData.forEach(ruta => {
       // Usamos el número de ruta para crear un ID único (ej. "Ruta_1")
       const docId = `Ruta_${ruta.ruta.toString().trim()}`;
       const docRef = db.collection('rutas').doc(docId);
-      
+
       // .set() con { merge: true } actualiza si ya existe, o lo crea si es nuevo
-      batch.set(docRef, ruta, { merge: true }); 
+      batch.set(docRef, ruta, { merge: true });
     });
 
     await batch.commit();
     console.log(`📥 Sincronización exitosa: ${rutasData.length} rutas actualizadas.`);
     res.status(200).json({ success: true, message: "Datos sincronizados con Firebase" });
-    
+
   } catch (error) {
     console.error("Error sincronizando rutas:", error);
     res.status(500).json({ success: false, message: error.message });
@@ -1266,8 +1502,19 @@ app.post('/api/rutas/sync', autorizar('rutas:sync'), async (req, res) => {
 // ENDPOINT 4: Chat Operativo (Copiloto)
 // Solo Admin y Jefe pueden usar el copiloto
 // ==========================================
+app.get('/api/chat/status', autorizar('chat:enviar'), async (_req, res) => {
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+
+  return res.status(200).json({
+    success: true,
+    chat_openai_configurado: Boolean(apiKey),
+    chat_openai_cliente_activo: Boolean(openai),
+    chat_modo: openai ? 'openai' : 'fallback'
+  });
+});
+
 app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
-  const { mensaje_usuario } = req.body || {};
+  const { mensaje_usuario, fecha, turno } = req.body || {};
   let rutas = [];
 
   if (!mensaje_usuario || !String(mensaje_usuario).trim()) {
@@ -1280,7 +1527,33 @@ app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
   try {
     const snapshot = await db.collection('rutas').get();
     snapshot.forEach((doc) => rutas.push({ id: doc.id, ...doc.data() }));
+
+    const fechaContexto = textoNormalizado(fecha) || fechaISOHoy();
+    const turnoContexto = turnoNormalizado(turno);
+
     const contextAI = await construirContextoIAConMemoria(rutas, SEMANAS_MEMORIA_DEFECTO);
+    const resumenOperativo = construirResumenOperativoChat(rutas);
+    const contextoEmpleados = await obtenerContextoEmpleadosChat(req.usuario, 25);
+    const planesRecientes = await obtenerPlanesIARecientesChat(8);
+    const resumenProgramacion = await obtenerResumenProgramacionChat({
+      fecha: fechaContexto,
+      turno: turnoContexto,
+      limite: 12
+    });
+
+    const contextoChat = {
+      usuario: {
+        uid: req.usuario?.uid || null,
+        rol: req.usuario?.rol || null,
+        nombre: req.usuario?.nombre || null
+      },
+      consulta_usuario: textoNormalizado(mensaje_usuario),
+      contexto_operativo: resumenOperativo,
+      contexto_programacion: resumenProgramacion,
+      contexto_empleados: contextoEmpleados,
+      aprendizaje_previo: contextAI.aprendizaje_previo,
+      planes_ia_recientes: planesRecientes
+    };
 
     if (!openai) {
       return res.status(200).json({
@@ -1295,14 +1568,15 @@ app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
         {
           role: 'system',
           content:
-            'Eres un copiloto logistico de ILPEA. Responde en espanol con recomendaciones breves, accionables y orientadas a operacion. Usa el aprendizaje_previo para detectar patrones de cancelacion, decisiones historicas del admin y riesgo operativo semanal. Si hay incertidumbre, indicala y sugiere una validacion puntual.'
+            'Eres un copiloto logistico de ILPEA entrenado con datos operativos reales del sistema. Responde en espanol con recomendaciones breves, accionables y orientadas a operacion. Adapta el nivel de detalle segun el rol del usuario (ADMIN o JEFE). Si la pregunta requiere datos no disponibles, dilo explicitamente y propone como validarlo. Nunca inventes cifras; usa un rango o N/D cuando falten datos.'
         },
         {
           role: 'user',
-          content: `Consulta del jefe: ${mensaje_usuario}\n\nContexto IA (actual + historico): ${JSON.stringify(contextAI)}`
+          content: `Consulta: ${mensaje_usuario}\n\nContexto operativo entrenado: ${JSON.stringify(contextoChat)}`
         }
       ],
       temperature: 0.2
+      max_tokens: 500
     });
 
     const respuestaIA = completion.choices?.[0]?.message?.content?.trim();
@@ -1371,8 +1645,8 @@ app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res)
 
     // 3. Consulta a OpenAI enviando el prompt y los datos de Firebase
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', 
-      response_format: { type: "json_object" }, 
+      model: 'gpt-4o-mini',
+      response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
         { role: 'user', content: `Analiza estos datos y genera el JSON: ${JSON.stringify(contextAI)}` }
@@ -1823,8 +2097,8 @@ app.post('/api/ai/ejecutar-plan', autorizar('asignacion:crear'), async (req, res
         || mensaje.startsWith('DUPLICATE_TARGET_ASSIGNMENT')
         || mensaje.startsWith('EMPTY_SOURCE_ROUTE')
         || mensaje.startsWith('EMPTY_MOVE_SET')
-          ? 409
-          : 400;
+        ? 409
+        : 400;
 
     console.error('Error ejecutando plan IA:', mensaje);
     res.status(status).json({
@@ -2184,10 +2458,10 @@ app.post('/api/empleados', autorizar('empleados:crear'), async (req, res) => {
     });
   } catch (error) {
     console.error('Error creando empleado:', error.message);
-    
+
     // Rollback si se creó en Auth pero falló en Firestore
     if (userRecord && userRecord.uid) {
-      await admin.auth().deleteUser(userRecord.uid).catch(err => 
+      await admin.auth().deleteUser(userRecord.uid).catch(err =>
         console.error('Error al hacer rollback de Auth:', err.message)
       );
     }
@@ -2447,10 +2721,10 @@ app.post('/api/jefes', autorizar('jefes:crear'), async (req, res) => {
     });
   } catch (error) {
     console.error('Error creando jefe:', error.message);
-    
+
     // Rollback si se creó en Auth pero falló en Firestore
     if (userRecord && userRecord.uid) {
-      await admin.auth().deleteUser(userRecord.uid).catch(err => 
+      await admin.auth().deleteUser(userRecord.uid).catch(err =>
         console.error('Error al hacer rollback de Auth:', err.message)
       );
     }
@@ -2699,9 +2973,9 @@ app.post('/api/auth/login', (req, res) => {
     usuario: {
       email,
       rol,
-      nombre: rol === ROLES.ADMIN ? 'Admin' : 
-             rol === ROLES.JEFE ? 'Jefe' : 
-             'Empleado'
+      nombre: rol === ROLES.ADMIN ? 'Admin' :
+        rol === ROLES.JEFE ? 'Jefe' :
+          'Empleado'
     },
     // En desarrollo simulado, devolver token falso
     token: 'simulado-token-' + Date.now()
