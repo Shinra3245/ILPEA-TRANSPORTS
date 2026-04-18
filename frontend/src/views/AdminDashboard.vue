@@ -1,71 +1,66 @@
 <template>
-  <div class="dashboard-container">
-    <header class="header">
-      <h1>ILPEA | Admin Dashboard</h1>
-      <p>Control de Optimización Logística y Right-Sizing</p>
-    </header>
+  <div class="admin-layout">
+    <aside class="sidebar">
+      <div class="brand">ILPEA <span>ADMIN</span></div>
+      <nav class="nav-menu">
+        <button class="nav-item active">Dashboard</button>
+        <button @click="irARutasApi" class="nav-item">Gestionar Rutas</button>
+        <button class="nav-item">Usuarios</button>
+      </nav>
+      <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
+    </aside>
 
-    <main>
+    <main class="main-content">
+      <header class="content-header">
+        <h2>Estado Operativo de Red</h2>
+        <p>Aforo mínimo para justificar ruta: <strong>40%</strong></p>
+      </header>
+
+      <section class="ia-container">
         <RecomendacionesIA />
-      <div v-if="cargando" class="loading">
-        Cargando datos desde Firebase...
-      </div>
-      
-      <div v-else-if="error" class="error">
-        {{ error }}
+      </section>
+
+      <div v-if="cargando" class="status-box">Sincronizando con Backend...</div>
+      <div v-else-if="error" class="status-box error-msg">
+        <p>⚠️ {{ error }}</p>
+        <button @click="obtenerRutas" class="btn-retry">Reintentar Conexión</button>
       </div>
 
-      <div v-else class="table-wrapper">
-        <table class="rutas-table">
+      <div v-else class="table-card">
+        <table class="minimal-table">
           <thead>
             <tr>
               <th>Ruta</th>
-              <th>Tipo de Unidad</th>
-              <th>Capacidad Real</th>
-              <th>Pico Pasajeros</th>
-              <th>Ocupación Máxima</th>
-              <th>Alerta (Regla 40%)</th>
-              <th>Right-Sizing</th>
+              <th>Unidad</th>
+              <th>Capacidad</th>
+              <th>Ocupación %</th>
+              <th>Estado</th>
+              <th>Acción</th>
             </tr>
           </thead>
           <tbody>
-            <tr 
-              v-for="ruta in rutas" 
-              :key="ruta.id"
-              :class="{ 'fila-peligro': ruta.alerta_ocupacion.includes('CANCELAR') }"
-            >
-              <td><strong>{{ ruta.ruta }}</strong></td>
+            <tr v-for="ruta in rutas" :key="ruta.id" :class="{ 'row-alert': ruta.porcentaje_ocupacion_max < 40 }">
+              <td><strong>Ruta {{ ruta.ruta }}</strong></td>
               <td>{{ ruta['tipo de unidad'] }}</td>
               <td>{{ ruta.capacidad_real }}</td>
-              <td>{{ ruta.max_pasajeros_dia }}</td>
-              
               <td>
-                <div class="barra-contenedor">
-                  <div 
-                    class="barra-progreso" 
-                    :style="{ width: Math.min(ruta.porcentaje_ocupacion_max, 100) + '%' }"
-                    :class="{ 'bg-rojo': ruta.porcentaje_ocupacion_max < 40, 'bg-verde': ruta.porcentaje_ocupacion_max >= 40 }"
-                  ></div>
+                <div class="occupancy-cell">
+                  <div class="bar-bg">
+                    <div class="bar-fill" 
+                         :style="{ width: Math.min(ruta.porcentaje_ocupacion_max, 100) + '%' }"
+                         :class="ruta.porcentaje_ocupacion_max < 40 ? 'low' : 'ok'">
+                    </div>
+                  </div>
+                  <span>{{ ruta.porcentaje_ocupacion_max.toFixed(1) }}%</span>
                 </div>
-                <span class="porcentaje-texto">{{ ruta.porcentaje_ocupacion_max.toFixed(1) }}%</span>
               </td>
-              
               <td>
-                <span :class="['badge', ruta.alerta_ocupacion === 'OK' ? 'badge-ok' : 'badge-alerta']">
+                <span :class="['tag', ruta.alerta_ocupacion === 'OK' ? 'tag-ok' : 'tag-alert']">
                   {{ ruta.alerta_ocupacion }}
                 </span>
               </td>
-              
               <td>
-                <button 
-                  v-if="ruta.sugerencia_right_sizing.includes('CAMBIAR')" 
-                  class="btn-cambio"
-                >
-                  {{ ruta.sugerencia_right_sizing }}
-                </button>
-                <span v-else class="texto-mantener">
-                  {{ ruta.sugerencia_right_sizing }}
-                </span>
+                <button class="btn-manage">Control</button>
               </td>
             </tr>
           </tbody>
@@ -76,175 +71,90 @@
 </template>
 
 <script setup lang="ts">
-import RecomendacionesIA from '../components/RecomendacionesIA.vue';
 import { ref, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import RecomendacionesIA from '../components/RecomendacionesIA.vue';
 
-// 1. Definición del Modelo de Datos (TypeScript)
-interface Ruta {
-  id: string;
-  ruta: number;
-  "tipo de unidad": string;
-  capacidad_real: number;
-  max_pasajeros_dia: number;
-  porcentaje_ocupacion_max: number;
-  alerta_ocupacion: string;
-  sugerencia_right_sizing: string;
-}
-
-// 2. Variables Reactivas
-const rutas = ref<Ruta[]>([]);
-const cargando = ref<boolean>(true);
+const router = useRouter();
+const rutas = ref<any[]>([]);
+const cargando = ref(true);
 const error = ref<string | null>(null);
 
-// 3. Función para consumir la API de Node.js
 const obtenerRutas = async () => {
   try {
-    // Apuntamos al servidor de Node.js que creamos en el Frente 2
-    const respuesta = await fetch('http://localhost:3000/api/rutas');
+    cargando.value = true;
+    error.value = null;
+
+    // Asegúrate que el backend de Node esté corriendo en el puerto 3000
+    const res = await fetch('http://localhost:3000/api/rutas');
     
-    if (!respuesta.ok) throw new Error('Error al conectar con el servidor');
+    if (!res.ok) throw new Error(`Servidor no disponible (Status: ${res.status})`);
     
-    const json = await respuesta.json();
+    const json = await res.json();
     
-    // Asignamos la data cruda a nuestra variable reactiva
-    // Ordenamos las rutas numéricamente para mejor lectura
-    rutas.value = json.data.sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
-    
-  } catch (err) {
-    error.value = 'No se pudieron cargar las rutas. Verifica que Node.js esté corriendo.';
-    console.error(err);
+    // Validación de estructura de datos
+    if (json && json.data) {
+      rutas.value = json.data.sort((a: any, b: any) => a.ruta - b.ruta);
+    } else {
+      rutas.value = json; // Caso donde el array venga directo
+    }
+  } catch (e: any) {
+    console.error("Falla en API:", e);
+    error.value = "No se pudo conectar con la base de datos. Verifica el Backend.";
   } finally {
     cargando.value = false;
   }
 };
 
-// 4. Ejecutar al montar el componente
-onMounted(() => {
-  obtenerRutas();
-});
+const irARutasApi = () => console.log("Llamando a módulo de rutas...");
+const cerrarSesion = () => {
+  localStorage.removeItem('userRole');
+  router.push('/login');
+};
+
+onMounted(obtenerRutas);
 </script>
 
 <style scoped>
-/* Estilos Base para el MVP */
-.dashboard-container {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  padding: 2rem;
-  background-color: #f8fafc;
-  min-height: 100vh;
-  color: #0f172a; 
-}
+/* Reset Minimalista */
+.admin-layout { display: flex; min-height: 100vh; background: #f8f9fa; font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; }
 
-.header {
-  margin-bottom: 2rem;
-  border-bottom: 2px solid #e2e8f0;
-  padding-bottom: 1rem;
-}
+/* Sidebar Estilo OCI */
+.sidebar { width: 240px; background: #000; color: #fff; padding: 2rem 1.5rem; display: flex; flex-direction: column; }
+.brand { font-weight: 800; font-size: 1.2rem; margin-bottom: 3rem; }
+.brand span { color: #666; font-weight: 400; }
+.nav-menu { flex: 1; }
+.nav-item { display: block; width: 100%; background: none; border: none; color: #888; text-align: left; padding: 0.8rem 0; cursor: pointer; transition: 0.2s; font-size: 0.9rem; }
+.nav-item.active, .nav-item:hover { color: #fff; }
+.logout-btn { background: none; border: 1px solid #333; color: #888; padding: 0.6rem; border-radius: 6px; cursor: pointer; }
 
-.header h1 {
-  margin: 0;
-  color: #1e293b;
-}
+/* Main Content */
+.main-content { flex: 1; padding: 3rem; overflow-y: auto; }
+.content-header { margin-bottom: 2rem; }
+.content-header h2 { margin: 0; font-size: 1.5rem; }
+.content-header p { color: #666; font-size: 0.9rem; margin-top: 0.5rem; }
 
-.header p {
-  color: #64748b;
-  margin-top: 0.5rem;
-}
+/* Tablas y Cards */
+.table-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; }
+.minimal-table { width: 100%; border-collapse: collapse; }
+.minimal-table th { background: #fafafa; padding: 1rem; text-align: left; font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.minimal-table td { padding: 1.2rem 1rem; border-top: 1px solid #f0f0f0; font-size: 0.9rem; }
 
-/* Tabla Estilos */
-.table-wrapper {
-  overflow-x: auto;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-}
+/* Barras de Ocupación */
+.occupancy-cell { display: flex; align-items: center; gap: 12px; }
+.bar-bg { flex: 1; background: #eee; height: 6px; border-radius: 10px; overflow: hidden; }
+.bar-fill { height: 100%; transition: 0.4s ease; }
+.bar-fill.ok { background: #10b981; }
+.bar-fill.low { background: #ef4444; }
 
-.rutas-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
+/* Tags de Estado */
+.tag { padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; }
+.tag-ok { background: #ecfdf5; color: #065f46; }
+.tag-alert { background: #fef2f2; color: #991b1b; }
 
-.rutas-table th, .rutas-table td {
-  padding: 1rem;
-  border-bottom: 1px solid #e2e8f0;
-  color: #334155; 
-}
-
-.rutas-table th {
-  background-color: #f1f5f9;
-  color: #475569;
-  font-weight: 600;
-}
-
-/* Formato Condicional (Reglas de Negocio) */
-.fila-peligro {
-  background-color: #fef2f2;
-}
-
-/* Barra de Ocupación */
-.barra-contenedor {
-  width: 100%;
-  background-color: #e2e8f0;
-  border-radius: 4px;
-  height: 8px;
-  margin-bottom: 4px;
-  overflow: hidden;
-}
-
-.barra-progreso {
-  height: 100%;
-  transition: width 0.3s ease;
-}
-
-.bg-rojo { background-color: #ef4444; }
-.bg-verde { background-color: #22c55e; }
-.porcentaje-texto { font-size: 0.85rem; color: #475569; }
-
-/* Badges y Botones */
-.badge {
-  padding: 0.25rem 0.75rem;
-  border-radius: 9999px;
-  font-size: 0.85rem;
-  font-weight: bold;
-}
-
-.badge-ok {
-  background-color: #dcfce7;
-  color: #166534;
-}
-
-.badge-alerta {
-  background-color: #fee2e2;
-  color: #991b1b;
-}
-
-.btn-cambio {
-  background-color: #eab308;
-  color: white;
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: bold;
-}
-
-.btn-cambio:hover {
-  background-color: #ca8a04;
-}
-
-.texto-mantener {
-  color: #64748b;
-  font-size: 0.9rem;
-}
-
-.loading, .error {
-  text-align: center;
-  padding: 2rem;
-  font-size: 1.2rem;
-  color: #475569;
-}
-
-.error {
-  color: #ef4444;
-}
+.row-alert { background-color: #fffafa; }
+.status-box { padding: 4rem; text-align: center; color: #888; }
+.error-msg { color: #ef4444; }
+.btn-manage { background: none; border: 1px solid #ddd; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+.btn-retry { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; background: #000; color: #fff; border: none; border-radius: 4px; }
 </style>
