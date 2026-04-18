@@ -5,6 +5,10 @@ const admin = require('firebase-admin');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
+// Importar configuración de RBAC
+const { ROLES, tienePermiso, obtenerPermisosDelRol } = require('./config/roles');
+const { autenticar, autorizar, autenticarSimulado, registrarAccion } = require('./middleware/auth');
+
 // 1. Inicializar Firebase Admin usando nuestra llave local
 const serviceAccount = require('../config/firebase-key.json');
 
@@ -57,15 +61,34 @@ function generarRespuestaFallback(mensajeUsuario, rutas) {
   return `Resumen rápido: ${totalRutas} rutas analizadas, ${rutasCriticas.length} con ocupación menor a 40% y ${rutasRightSizing.length} candidatas a right-sizing.`;
 }
 
-// Middlewares
+// Middlewares Globales
 app.use(cors());
 app.use(express.json()); // Permite recibir datos en formato JSON
 
+// Middleware de autenticación (simulado para desarrollo - cambiar en producción)
+// Por defecto usa Firebase Auth real. Para pruebas locales: AUTH_MODE=simulated
+app.use((req, res, next) => {
+  // Saltar autenticación para /api/auth/login (permitir acceso público)
+  if (req.path === '/api/auth/login' || req.path === '/api/auth/crear-usuario') {
+    return next();
+  }
+
+  const modoAuth = (process.env.AUTH_MODE || 'firebase').toLowerCase();
+  if (modoAuth === 'simulated') {
+    return autenticarSimulado(req, res, next);
+  }
+
+  return autenticar(req, res, next);
+});
+
+// Middleware de logging/auditoría
+app.use(registrarAccion('acciones'));
+
 // ==========================================
 // ENDPOINT 1: Obtener todas las rutas
-// (Consumido por el Dashboard del Administrador)
+// (Consumido por el Dashboard del Administrador, Jefe y Empleado)
 // ==========================================
-app.get('/api/rutas', async (req, res) => {
+app.get('/api/rutas', autorizar('rutas:ver'), async (req, res) => {
   try {
     const rutasSnapshot = await db.collection('rutas').get();
     const rutas = [];
@@ -87,8 +110,9 @@ app.get('/api/rutas', async (req, res) => {
 
 // ==========================================
 // ENDPOINT 2: El "Cap Check" (Asignación Atómica)
+// Solo Admin y Jefe pueden asignar empleados a rutas
 // ==========================================
-app.post('/api/asignar', async (req, res) => {
+app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
   const { id_empleado, id_ruta, fecha } = req.body;
   
   // Referencia al documento de programación diaria específico
@@ -130,8 +154,9 @@ app.post('/api/asignar', async (req, res) => {
 
 // ==========================================
 // ENDPOINT 3: Sincronizar datos desde Python
+// Solo Admin puede sincronizar datos
 // ==========================================
-app.post('/api/rutas/sync', async (req, res) => {
+app.post('/api/rutas/sync', autorizar('rutas:sync'), async (req, res) => {
   const rutasData = req.body; // Esperamos recibir un arreglo de rutas desde Python
   
   try {
@@ -158,8 +183,9 @@ app.post('/api/rutas/sync', async (req, res) => {
 
 // ==========================================
 // ENDPOINT 4: Chat Operativo (Copiloto)
+// Solo Admin y Jefe pueden usar el copiloto
 // ==========================================
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
   const { mensaje_usuario } = req.body || {};
 
   if (!mensaje_usuario || !String(mensaje_usuario).trim()) {
@@ -218,8 +244,9 @@ app.post('/api/chat', async (req, res) => {
 
 // ==========================================
 // ENDPOINT 5: Insights Automáticos (Proactivo)
+// Solo Admin y Jefe pueden ver insights
 // ==========================================
-app.get('/api/insights-automaticos', async (req, res) => {
+app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res) => {
   if (!openai) {
     return res.status(503).json({
       success: false,
@@ -275,6 +302,214 @@ app.get('/api/insights-automaticos', async (req, res) => {
     console.error("Error generando insights:", error);
     res.status(500).json({ success: false, message: "Error conectando con la IA" });
   }
+});
+
+// ==========================================
+// ENDPOINT 6: Obtener info del usuario autenticado
+// ==========================================
+app.get('/api/auth/me', (req, res) => {
+  if (!req.usuario) {
+    return res.status(401).json({
+      success: false,
+      message: 'No autenticado'
+    });
+  }
+
+  res.json({
+    success: true,
+    usuario: {
+      uid: req.usuario.uid,
+      email: req.usuario.email,
+      nombre: req.usuario.nombre,
+      rol: req.usuario.rol,
+      permisos: obtenerPermisosDelRol(req.usuario.rol)
+    }
+  });
+});
+
+// ==========================================
+// ENDPOINT 7: Crear usuario (Solo Admin)
+// ==========================================
+app.post('/api/usuarios/crear', autorizar('usuarios:crear'), async (req, res) => {
+  const { email, nombre, rol = ROLES.EMPLEADO, password } = req.body;
+
+  if (!email || !nombre || !rol || !password) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email, nombre, rol y password son requeridos.'
+    });
+  }
+
+  // Validar que el rol sea válido
+  if (!Object.values(ROLES).includes(rol)) {
+    return res.status(400).json({
+      success: false,
+      message: `Rol inválido. Roles permitidos: ${Object.values(ROLES).join(', ')}`
+    });
+  }
+
+  try {
+    // Crear usuario en Firebase Auth
+    const userRecord = await admin.auth().createUser({
+      email,
+      password,
+      displayName: nombre
+    });
+
+    // Guardar datos adicionales en Firestore
+    await db.collection('usuarios').doc(userRecord.uid).set({
+      email,
+      nombre,
+      rol,
+      creado_por: req.usuario.uid,
+      creado_en: new Date(),
+      activo: true
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Usuario creado exitosamente.',
+      usuario: {
+        uid: userRecord.uid,
+        email,
+        nombre,
+        rol
+      }
+    });
+  } catch (error) {
+    console.error('Error creando usuario:', error.message);
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 8: Listar usuarios (Solo Admin)
+// ==========================================
+app.get('/api/usuarios', autorizar('usuarios:ver'), async (req, res) => {
+  try {
+    const usuariosSnapshot = await db.collection('usuarios').get();
+    const usuarios = [];
+
+    usuariosSnapshot.forEach(doc => {
+      const data = doc.data();
+      usuarios.push({
+        uid: doc.id,
+        email: data.email,
+        nombre: data.nombre,
+        rol: data.rol,
+        activo: data.activo,
+        creado_en: data.creado_en
+      });
+    });
+
+    res.json({
+      success: true,
+      cantidad: usuarios.length,
+      data: usuarios
+    });
+  } catch (error) {
+    console.error('Error listando usuarios:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo usuarios'
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 9: Actualizar rol de usuario (Solo Admin)
+// ==========================================
+app.put('/api/usuarios/:uid/rol', autorizar('usuarios:actualizar'), async (req, res) => {
+  const { uid } = req.params;
+  const { rol } = req.body;
+
+  if (!rol || !Object.values(ROLES).includes(rol)) {
+    return res.status(400).json({
+      success: false,
+      message: `Rol inválido. Roles permitidos: ${Object.values(ROLES).join(', ')}`
+    });
+  }
+
+  try {
+    await db.collection('usuarios').doc(uid).update({
+      rol,
+      actualizado_por: req.usuario.uid,
+      actualizado_en: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Rol actualizado exitosamente.'
+    });
+  } catch (error) {
+    console.error('Error actualizando rol:', error.message);
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 10: Eliminar usuario (Solo Admin)
+// ==========================================
+app.delete('/api/usuarios/:uid', autorizar('usuarios:eliminar'), async (req, res) => {
+  const { uid } = req.params;
+
+  try {
+    // Marcar como inactivo en Firestore
+    await db.collection('usuarios').doc(uid).update({
+      activo: false,
+      eliminado_por: req.usuario.uid,
+      eliminado_en: new Date()
+    });
+
+    // Opcionalmente, también eliminarlo de Firebase Auth
+    await admin.auth().deleteUser(uid);
+
+    res.json({
+      success: true,
+      message: 'Usuario eliminado exitosamente.'
+    });
+  } catch (error) {
+    console.error('Error eliminando usuario:', error.message);
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 11: Login simulado (Para desarrollo)
+// ==========================================
+app.post('/api/auth/login', (req, res) => {
+  const { email, rol = ROLES.EMPLEADO } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email requerido'
+    });
+  }
+
+  // En producción, usar Firebase Auth correctamente
+  res.json({
+    success: true,
+    message: 'Login simulado exitoso',
+    usuario: {
+      email,
+      rol,
+      nombre: rol === ROLES.ADMIN ? 'Admin' : 
+             rol === ROLES.JEFE ? 'Jefe' : 
+             'Empleado'
+    },
+    // En desarrollo simulado, devolver token falso
+    token: 'simulado-token-' + Date.now()
+  });
 });
 
 // Inicializar el servidor

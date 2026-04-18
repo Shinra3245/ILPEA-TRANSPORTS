@@ -2,6 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
 import PanelJefe from '../views/PanelJefe.vue'
+import EmpleadoDashboard from '../views/EmpleadoDashboard.vue'
+import { useAuth } from '../composables/useAuth'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -19,21 +21,29 @@ const router = createRouter({
       name: 'Jefe', 
       component: PanelJefe,
       meta: { requiresAuth: true, role: 'JEFE' }
+    },
+    {
+      path: '/empleado',
+      name: 'Empleado',
+      component: EmpleadoDashboard,
+      meta: { requiresAuth: true, role: 'EMPLEADO' }
     }
   ]
 })
 
 // GUARDIÁN DE NAVEGACIÓN (Protección de Rutas)
-router.beforeEach((to, from, next) => {
-  // Para este MVP, leeremos el rol desde localStorage (simulando Firebase Auth)
-  const userRole = localStorage.getItem('userRole')
+router.beforeEach(async (to, from, next) => {
+  const { restaurarSesion, obtenerRol } = useAuth()
+  const autenticado = await restaurarSesion()
+  const userRole = obtenerRol()
 
-  if (to.meta.requiresAuth && !userRole) {
+  if (to.meta.requiresAuth && !autenticado) {
     next('/login') // Si no está logueado, lo mandamos al login
   } else if (to.meta.role && to.meta.role !== userRole) {
     // Si intenta entrar a una vista que no es de su rol
     if (userRole === 'ADMIN') next('/admin')
     else if (userRole === 'JEFE') next('/jefe')
+    else if (userRole === 'EMPLEADO') next('/empleado')
     else next('/login')
   } else {
     next() // Todo en orden, le permitimos pasar
