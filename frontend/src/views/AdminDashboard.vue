@@ -171,19 +171,15 @@ const obtenerRutas = async () => {
   }
 };
 
-// --- NUEVA FUNCIÓN PARA EXPORTAR A EXCEL (CSV) ---
 const exportandoExcel = ref(false);
 
 const exportarTablaExcel = () => {
   exportandoExcel.value = true;
   
   try {
-    // 1. Definir los encabezados del Excel
     const encabezados = ['Ruta', 'Tipo de Unidad', 'Capacidad', 'Ocupacion (%)', 'Sugerencia Sistema', 'Estado Logistico (Umbral 40%)'];
 
-    // 2. Mapear los datos aplicando las reglas de negocio
     const filas = rutas.value.map(ruta => {
-      // Determinamos si se activa o cancela en base a la regla estricta de ILPEA
       const estadoOperativo = ruta.porcentaje_ocupacion_max < 40 ? 'CANCELADA' : 'ACTIVADA';
       
       return [
@@ -193,14 +189,11 @@ const exportarTablaExcel = () => {
         ruta.porcentaje_ocupacion_max.toFixed(2),
         `"${ruta.sugerencia_right_sizing}"`,
         `"${estadoOperativo}"`
-      ].join(','); // Separamos por comas para el CSV
+      ].join(','); 
     });
 
-    // 3. Unir encabezados y filas. 
-    // \uFEFF es un BOM (Byte Order Mark) crucial para que Excel lea los acentos UTF-8 correctamente.
     const contenidoCsv = "\uFEFF" + encabezados.join(',') + '\n' + filas.join('\n');
     
-    // 4. Crear un enlace de descarga dinámico
     const blob = new Blob([contenidoCsv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     
@@ -220,9 +213,7 @@ const exportarTablaExcel = () => {
     exportandoExcel.value = false;
   }
 };
-// -------------------------------------------------
 
-// Navegación
 const irADashboard = () => router.push('/admin');
 const irARutasApi = () => router.push('/admin/rutas');
 
@@ -236,27 +227,69 @@ onMounted(obtenerRutas);
 </script>
 
 <style scoped>
-/* Estilos intactos según tu solicitud */
-.admin-layout { display: flex; min-height: 100vh; background: #f8f9fa; font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; }
-.sidebar { width: 240px; background: #000; color: #fff; padding: 2rem 1.5rem; display: flex; flex-direction: column; }
+/* 1. RESTAURAMOS EL SCROLL NATURAL DE LA PÁGINA */
+.admin-layout { 
+  display: flex; 
+  min-height: 100vh; /* Permite que la pantalla crezca hacia abajo de forma natural */
+  background: #f8f9fa; 
+  font-family: 'Inter', system-ui, sans-serif; 
+  color: #1a1a1a; 
+}
+
+/* 2. EL MENÚ LATERAL AHORA ACOMPAÑA AL DOCUMENTO */
+.sidebar { 
+  width: 240px; 
+  background: #000; 
+  color: #fff; 
+  padding: 2rem 1.5rem; 
+  display: flex; 
+  flex-direction: column; 
+}
+
 .brand { font-weight: 800; font-size: 1.2rem; margin-bottom: 3rem; }
 .brand span { color: #666; font-weight: 400; }
-.nav-menu { flex: 1; }
+
+/* 3. QUITAMOS EL FLEX:1 PARA QUE NO EMPUJE EL BOTÓN HACIA ABAJO */
+.nav-menu { 
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 2rem; /* Separación directa entre "Usuarios" y "Cerrar Sesión" */
+}
+
 .nav-item { display: block; width: 100%; background: none; border: none; color: #888; text-align: left; padding: 0.8rem 0; cursor: pointer; transition: 0.2s; font-size: 0.9rem; }
 .nav-item.active, .nav-item:hover { color: #fff; }
-.logout-btn { background: none; border: 1px solid #333; color: #888; padding: 0.6rem; border-radius: 6px; cursor: pointer; }
 
-.main-content { flex: 1; padding: 3rem; overflow-y: auto; }
+/* 4. BOTÓN CERRAR SESIÓN (Sin margin-top: auto) */
+.logout-btn { 
+  background: #ef4444; 
+  color: #ffffff; 
+  padding: 0.8rem; 
+  border: none;
+  border-radius: 6px; 
+  cursor: pointer; 
+  font-weight: 700; 
+  transition: background 0.3s; 
+  width: 100%;
+}
+.logout-btn:hover { background: #dc2626; }
+
+/* 5. CONTENIDO PRINCIPAL FLUYE NATURALMENTE */
+.main-content { 
+  flex: 1; 
+  padding: 3rem; 
+  /* Ya no necesita overflow-y: auto porque el body general se encarga del scroll */
+}
+
 .header-flex { display: flex; justify-content: space-between; align-items: flex-start; }
 .content-header { margin-bottom: 2rem; }
 .content-header h2 { margin: 0; font-size: 1.5rem; }
 .content-header p { color: #666; font-size: 0.9rem; margin-top: 0.5rem; }
 
-/* Botón Exportar - Ajustado ligeramente el color para denotar Excel */
 .btn-exportar { background: #000; color: #fff; border: none; padding: 0.7rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem; transition: 0.3s; }
 .btn-exportar:hover { background: #333; }
 .btn-exportar:disabled { background: #888; cursor: not-allowed; }
-.excel-btn { background: #107c41; } /* Verde estilo Excel */
+.excel-btn { background: #107c41; } 
 .excel-btn:hover { background: #0c5e31; }
 
 .charts-filter { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
