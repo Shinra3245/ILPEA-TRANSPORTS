@@ -1008,4 +1008,54 @@ label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; mar
   justify-content: flex-end;
   gap: 0.65rem;
 }
+
+/* RESPONSIVIDAD PARA MÓVILES Y TABLETS */
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    padding: 1rem;
+    gap: 1rem;
+  }
+  .user-info {
+    flex-direction: column;
+    width: 100%;
+    gap: 0.8rem;
+  }
+  .btn-logout {
+    width: 100%;
+  }
+  .dashboard-grid {
+    padding: 1.5rem 1rem;
+    gap: 1.5rem;
+  }
+  .crud-section,
+  .assignment-overview-section {
+    padding: 0 1rem 1.5rem;
+  }
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  .bus-header {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+  .bus-chassis {
+    padding: 15px 10px;
+  }
+  .seat {
+    width: 36px;
+    height: 36px;
+    font-size: 0.75rem;
+  }
+  .aisle-space {
+    margin-right: 12px;
+  }
+  .modal-actions {
+    flex-direction: column;
+  }
+  .modal-actions button {
+    width: 100%;
+  }
+}
 </style>

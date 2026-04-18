@@ -74,15 +74,62 @@
           </select>
         </div>
 
+        <section class="filters-card">
+          <div class="filters-header">
+            <h3 class="section-title">Filtros de Rutas</h3>
+            <button class="btn-manage" @click="limpiarFiltros">Limpiar</button>
+          </div>
+
+          <div class="filters-grid">
+            <div class="filter-item">
+              <label for="periodo-select">Periodo</label>
+              <select id="periodo-select" v-model="filtroPeriodo" class="minimal-select">
+                <option value="todos">Todos</option>
+                <option value="dia">Por día</option>
+                <option value="semana">Por semana</option>
+              </select>
+            </div>
+
+            <div class="filter-item" v-if="filtroPeriodo === 'dia'">
+              <label for="filtro-dia">Día</label>
+              <input id="filtro-dia" v-model="filtroDia" type="date" class="minimal-select" />
+            </div>
+
+            <div class="filter-item" v-if="filtroPeriodo === 'semana'">
+              <label for="filtro-semana">Semana</label>
+              <input
+                id="filtro-semana"
+                v-model.number="filtroSemana"
+                type="number"
+                min="1"
+                max="53"
+                class="minimal-select"
+              />
+            </div>
+
+            <div class="filter-item">
+              <label for="ocupacion-select">Ocupación</label>
+              <select id="ocupacion-select" v-model="filtroOcupacion" class="minimal-select">
+                <option value="todas">Todas</option>
+                <option value="baja">Baja (&lt; 40%)</option>
+                <option value="media">Media (40% a 79.9%)</option>
+                <option value="alta">Alta (&gt;= 80%)</option>
+              </select>
+            </div>
+          </div>
+
+          <p class="filters-info">Mostrando {{ rutasFiltradas.length }} de {{ rutas.length }} rutas.</p>
+        </section>
+
         <div class="charts-grid">
           <div v-show="selectedChart === 'todos' || selectedChart === 'ocupacion'" class="chart-item" id="chart-ocupacion">
-            <ChartOcupacion :rutas="rutas" />
+            <ChartOcupacion :rutas="rutasFiltradas" />
           </div>
           <div v-show="selectedChart === 'todos' || selectedChart === 'capacidad'" class="chart-item" id="chart-capacidad">
-            <ChartCapacidad :rutas="rutas" />
+            <ChartCapacidad :rutas="rutasFiltradas" />
           </div>
           <div v-show="selectedChart === 'todos' || selectedChart === 'alertas'" class="chart-item chart-item-small" id="chart-alertas">
-            <ChartAlertas :rutas="rutas" />
+            <ChartAlertas :rutas="rutasFiltradas" />
           </div>
         </div>
 
@@ -135,7 +182,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="ruta in rutas" :key="ruta.ruta" :class="{ 'row-alert': ruta.porcentaje_ocupacion_max < 40 }">
+                <tr v-for="ruta in rutasFiltradas" :key="ruta.ruta" :class="{ 'row-alert': ruta.porcentaje_ocupacion_max < 40 }">
                   <td><strong>Ruta {{ ruta.ruta }}</strong></td>
                   <td>{{ ruta['tipo de unidad'] }}</td>
                   <td>{{ ruta.capacidad_real }} asientos</td>
@@ -159,6 +206,9 @@
                     <button class="btn-manage">Control</button>
                   </td>
                 </tr>
+                <tr v-if="!rutasFiltradas.length">
+                  <td colspan="6" class="empty-row">No hay rutas que coincidan con los filtros seleccionados.</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -171,7 +221,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useAuth } from '../composables/useAuth';
 import { useRouter } from 'vue-router';
 // Importamos ExcelJS y FileSaver
@@ -194,6 +244,8 @@ interface Ruta {
   porcentaje_ocupacion_max: number;
   alerta_ocupacion: string;
   sugerencia_right_sizing: string;
+  fecha_operacion: string | null;
+  semana_operacion: number | null;
 }
 
 interface PlanIA {
@@ -239,6 +291,10 @@ const selectedChart = ref<string>('todos');
 const planesIA = ref<PlanIA[]>([]);
 const cargandoPlanes = ref(false);
 const errorPlanes = ref<string | null>(null);
+const filtroPeriodo = ref<'todos' | 'dia' | 'semana'>('todos');
+const filtroDia = ref(new Date().toISOString().slice(0, 10));
+const filtroSemana = ref<number>(1);
+const filtroOcupacion = ref<'todas' | 'baja' | 'media' | 'alta'>('todas');
 
 // Estados de carga específicos para las exportaciones
 const exportandoExcel = ref(false);
@@ -250,6 +306,22 @@ const numeroSeguro = (valor: unknown, fallback = 0): number => {
   return Number.isFinite(numero) ? numero : fallback;
 };
 
+const obtenerNumeroSemana = (fecha: Date): number => {
+  const fechaUTC = new Date(Date.UTC(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()));
+  const diaSemana = fechaUTC.getUTCDay() || 7;
+  fechaUTC.setUTCDate(fechaUTC.getUTCDate() + 4 - diaSemana);
+  const inicioAno = new Date(Date.UTC(fechaUTC.getUTCFullYear(), 0, 1));
+  return Math.ceil((((fechaUTC.getTime() - inicioAno.getTime()) / 86400000) + 1) / 7);
+};
+
+const normalizarFechaISO = (valor: unknown): string | null => {
+  if (!valor) return null;
+  const fecha = new Date(String(valor));
+  return Number.isNaN(fecha.getTime()) ? null : fecha.toISOString().slice(0, 10);
+};
+
+filtroSemana.value = obtenerNumeroSemana(new Date());
+
 const normalizarRuta = (ruta: RutaApi): Ruta => ({
   id: String(ruta.id ?? ''),
   ruta: numeroSeguro(ruta.ruta, 0),
@@ -258,11 +330,45 @@ const normalizarRuta = (ruta: RutaApi): Ruta => ({
   max_pasajeros_dia: numeroSeguro(ruta.max_pasajeros_dia, 0),
   porcentaje_ocupacion_max: numeroSeguro(ruta.porcentaje_ocupacion_max, 0),
   alerta_ocupacion: String(ruta.alerta_ocupacion ?? 'N/D'),
-  sugerencia_right_sizing: String(ruta.sugerencia_right_sizing ?? 'Sin sugerencia')
+  sugerencia_right_sizing: String(ruta.sugerencia_right_sizing ?? 'Sin sugerencia'),
+  fecha_operacion: normalizarFechaISO(ruta.fecha_operacion ?? ruta.fecha ?? ruta.dia),
+  semana_operacion: numeroSeguro(ruta.semana_operacion ?? ruta.semana ?? ruta.week, 0) || null
 });
 
 const obtenerOcupacionSegura = (ruta: Ruta): number => numeroSeguro(ruta.porcentaje_ocupacion_max, 0);
 const formatearOcupacion = (ruta: Ruta): string => obtenerOcupacionSegura(ruta).toFixed(1);
+
+const rutasFiltradas = computed(() => {
+  return rutas.value.filter((ruta) => {
+    const ocupacion = obtenerOcupacionSegura(ruta);
+
+    const cumpleOcupacion =
+      filtroOcupacion.value === 'todas' ||
+      (filtroOcupacion.value === 'baja' && ocupacion < 40) ||
+      (filtroOcupacion.value === 'media' && ocupacion >= 40 && ocupacion < 80) ||
+      (filtroOcupacion.value === 'alta' && ocupacion >= 80);
+
+    if (!cumpleOcupacion) return false;
+
+    if (filtroPeriodo.value === 'dia') {
+      return !!ruta.fecha_operacion && ruta.fecha_operacion === filtroDia.value;
+    }
+
+    if (filtroPeriodo.value === 'semana') {
+      const semanaRuta = ruta.semana_operacion ?? (ruta.fecha_operacion ? obtenerNumeroSemana(new Date(ruta.fecha_operacion)) : null);
+      return semanaRuta === filtroSemana.value;
+    }
+
+    return true;
+  });
+});
+
+const limpiarFiltros = () => {
+  filtroPeriodo.value = 'todos';
+  filtroOcupacion.value = 'todas';
+  filtroDia.value = new Date().toISOString().slice(0, 10);
+  filtroSemana.value = obtenerNumeroSemana(new Date());
+};
 
 // --- MÉTODOS API (Frente 2) ---
 const obtenerRutas = async () => {
@@ -345,7 +451,7 @@ const exportarTablaExcel = async () => {
     });
 
     // Datos
-    rutas.value.forEach(ruta => {
+    rutasFiltradas.value.forEach(ruta => {
       worksheet.addRow({
         ruta: `Ruta ${ruta.ruta}`,
         unidad: ruta['tipo de unidad'],
@@ -545,6 +651,11 @@ onMounted(() => {
 /* Resto de estilos intactos... */
 .charts-filter { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
 .minimal-select { padding: 0.5rem; border-radius: 6px; border: 1px solid #ddd; outline: none; background: #fff; }
+.filters-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1rem; margin-bottom: 1.5rem; }
+.filters-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.9rem; margin-top: 0.8rem; }
+.filter-item { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem; color: #374151; }
+.filters-info { margin: 0.8rem 0 0; font-size: 0.85rem; color: #6b7280; }
 .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem; margin-bottom: 3rem; }
 .chart-item { background: #fff; padding: 1.5rem; border-radius: 12px; border: 1px solid #e0e0e0; min-height: 300px; }
 .chart-item-small { grid-column: span 1; }
@@ -577,5 +688,31 @@ onMounted(() => {
 .error-msg { color: #ef4444; }
 .btn-manage { background: none; border: 1px solid #ddd; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
 .btn-retry { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; background: #000; color: #fff; border: none; border-radius: 4px; }
+.empty-row { text-align: center; color: #6b7280; font-style: italic; }
 @media print { .no-print { display: none !important; } }
+
+/* RESPONSIVIDAD PARA MÓVILES Y TABLETS */
+@media (max-width: 768px) {
+  .admin-layout { flex-direction: column; }
+  .sidebar { width: 100%; padding: 1.5rem; flex-direction: column; align-items: center; }
+  .brand { margin-bottom: 1.5rem; }
+  .nav-menu { width: 100%; align-items: stretch; }
+  .nav-item { text-align: center; }
+  .main-content { padding: 1.5rem 1rem; }
+  
+  .header-flex { flex-direction: column; gap: 1.5rem; align-items: stretch; }
+  .button-group { flex-direction: column; width: 100%; }
+  .btn-exportar { width: 100%; }
+  
+  .filters-header { flex-direction: column; align-items: flex-start; }
+  .filters-grid { grid-template-columns: 1fr; }
+  .section-header-inline { flex-direction: column; align-items: stretch; gap: 1rem; }
+  
+  .charts-filter { flex-direction: column; align-items: flex-start; }
+  .charts-filter select { width: 100%; }
+  
+  /* Habilita scroll en la tabla para no romper la pantalla */
+  .table-card { overflow-x: auto; }
+  .minimal-table { min-width: 800px; }
+}
 </style>

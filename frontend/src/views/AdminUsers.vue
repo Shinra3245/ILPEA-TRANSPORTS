@@ -185,13 +185,16 @@ const cerrarSesion = async () => {
   .admin-layout { flex-direction: column; }
   .sidebar {
     width: 100%;
-    padding: 1rem;
-    flex-direction: row;
+    padding: 1.5rem;
+    flex-direction: column;
     align-items: center;
-    gap: 2rem;
+    gap: 0;
   }
-  .brand { margin-bottom: 0; }
-  .nav-menu { flex-direction: row; margin-bottom: 0; }
-  .logout-btn { width: auto; padding: 0.5rem 1rem; }
+  .brand { margin-bottom: 1.5rem; }
+  .nav-menu { flex-direction: column; width: 100%; margin-bottom: 1.5rem; }
+  .nav-item { text-align: center; }
+  .logout-btn { width: 100%; padding: 0.8rem; }
+  .main-content { padding: 1.5rem 1rem; }
+  .header-flex { flex-direction: column; gap: 1rem; }
 }
 </style>
