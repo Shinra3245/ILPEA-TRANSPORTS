@@ -32,7 +32,7 @@
                 <div 
                   class="seat" 
                   :class="getSeatClass(n)"
-                  @click="seleccionarAsiento(n)"
+                  @click="manejarClickAsiento(n)"
                 >
                   {{ n }}
                 </div>
@@ -49,20 +49,37 @@
       <section class="form-section">
         <div class="section-card">
           <h3>Asignación de Empleado</h3>
-          <p class="subtitle">Selecciona un asiento en el mapa y llena los datos</p>
+          <p class="subtitle">Selecciona un asiento y asigna solo empleados bajo tu responsabilidad</p>
+
+          <p v-if="cargandoContexto" class="status-info">Cargando empleados y rutas del turno...</p>
           
           <div class="form-group">
-            <label>ID Empleado</label>
-            <input v-model="registro.idEmpleado" type="text" placeholder="Ej. 2496" class="minimal-input">
+            <label>Empleado asignado</label>
+            <select v-model="registro.idEmpleado" class="minimal-select" :disabled="!empleadosAsignados.length || cargandoContexto">
+              <option value="" disabled>
+                {{ empleadosAsignados.length ? 'Selecciona un empleado' : 'Sin empleados asignados' }}
+              </option>
+              <option v-for="empleado in empleadosAsignados" :key="empleado.uid" :value="empleado.id_empleado">
+                {{ empleado.id_empleado }} - {{ empleado.nombre }}
+              </option>
+            </select>
+            <p v-if="empleadoSeleccionado" class="helper-note">{{ empleadoSeleccionado.email }}</p>
           </div>
 
           <div class="form-group">
             <label>Ruta Activa</label>
-            <select v-model="registro.ruta" class="minimal-select">
-              <option v-for="r in rutas" :key="r.id" :value="r.id || r.ruta.toString()">
-                Ruta {{ r.ruta }} - {{ r.zona || r.nombre }}
+            <select v-model="registro.ruta" class="minimal-select" :disabled="!rutasParaTurno.length || cargandoContexto">
+              <option v-if="!rutasParaTurno.length" value="" disabled>
+                Sin rutas disponibles
+              </option>
+              <option v-for="r in rutasParaTurno" :key="r.id" :value="r.id">
+                {{ construirEtiquetaRuta(r) }}
               </option>
             </select>
+            <p class="helper-note">{{ resumenRutasTurno }}</p>
+            <p v-if="rutaRecomendada" class="helper-note">
+              Recomendación: {{ construirEtiquetaRuta(rutaRecomendada) }}
+            </p>
           </div>
 
           <div class="form-row">
@@ -89,12 +106,13 @@
 
           <button 
             @click="confirmarAsignacion" 
-            :disabled="!isFormReady || cargando"
+            :disabled="!isFormReady || procesandoAsignacion || cargandoContexto"
             class="btn-confirm"
           >
-            {{ cargando ? 'Procesando...' : 'Confirmar Registro' }}
+            {{ procesandoAsignacion ? 'Procesando...' : 'Confirmar Registro' }}
           </button>
 
+          <p v-if="aviso" class="status-info">{{ aviso }}</p>
           <p v-if="mensaje" class="status-ok">{{ mensaje }}</p>
           <p v-if="error" class="status-error">{{ error }}</p>
           
@@ -102,21 +120,91 @@
         </div>
       </section>
     </main>
+
+    <div
+      v-if="modalDesasignacion.visible && modalDesasignacion.detalle"
+      class="modal-overlay"
+      @click.self="cerrarModalDesasignacion"
+    >
+      <div class="modal-card">
+        <h4>Eliminar Asignación</h4>
+        <p class="helper-note">Confirma si deseas liberar este asiento y desasignar al empleado.</p>
+
+        <div class="modal-detail-grid">
+          <p><strong>Empleado:</strong> {{ modalDesasignacion.detalle.nombre }}</p>
+          <p><strong>ID:</strong> {{ modalDesasignacion.detalle.id_empleado }}</p>
+          <p><strong>Email:</strong> {{ modalDesasignacion.detalle.email }}</p>
+          <p><strong>Asiento:</strong> {{ modalDesasignacion.detalle.asiento }}</p>
+          <p><strong>Ruta:</strong> {{ modalDesasignacion.detalle.ruta }}</p>
+          <p><strong>Día:</strong> {{ modalDesasignacion.detalle.fecha }}</p>
+          <p><strong>Turno:</strong> {{ modalDesasignacion.detalle.turno }}</p>
+        </div>
+
+        <p v-if="errorModalDesasignacion" class="status-error">{{ errorModalDesasignacion }}</p>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" type="button" :disabled="modalDesasignacion.procesando" @click="cerrarModalDesasignacion">
+            Cancelar
+          </button>
+          <button class="btn-danger" type="button" :disabled="modalDesasignacion.procesando" @click="confirmarDesasignacion">
+            {{ modalDesasignacion.procesando ? 'Eliminando...' : 'Eliminar asignación' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <section class="crud-section">
+      <EmpleadoCrudPanel />
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
+import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue'
+
+interface EmpleadoAsignado {
+  uid: string;
+  id_empleado: string;
+  nombre: string;
+  email: string;
+  activo?: boolean;
+}
 
 interface Ruta {
-  id?: string;
+  id: string;
   ruta: number;
   zona?: string;
   nombre?: string;
   capacidad_real: number;
+  capacidad_limite?: number;
+  asientos_ocupados?: number;
+  asientos_disponibles?: number;
   pasajeros_ids?: string[];
+  asientos_reservados?: number[];
+  asientos_por_empleado?: Record<string, number>;
+  programada?: boolean;
+}
+
+interface ModalDesasignacionDetalle {
+  id_empleado: string;
+  nombre: string;
+  email: string;
+  asiento: number;
+  ruta: string;
+  fecha: string;
+  turno: string;
+}
+
+const TURNOS_LABEL: Record<string, string> = {
+  mixto_1: 'Mixto 1',
+  mixto_2: 'Mixto 2',
+  sab_3: 'Sábado 3er',
+  dom_1: 'Domingo 1er',
+  dom_2: 'Domingo 2do',
+  dom_3: 'Domingo 3er',
 }
 
 const router = useRouter()
@@ -128,70 +216,296 @@ const registro = ref({
   ruta: '',
   dia: new Date().toISOString().slice(0, 10),
   horario: 'mixto_1',
-  asiento: null as number | null
+  asiento: null as number | null,
 })
 
+const empleadosCatalogo = ref<EmpleadoAsignado[]>([])
+const empleadosAsignados = ref<EmpleadoAsignado[]>([])
 const rutas = ref<Ruta[]>([])
-const cargando = ref(true)
+const cargandoContexto = ref(true)
+const procesandoAsignacion = ref(false)
+const aviso = ref<string | null>(null)
 const error = ref<string | null>(null)
 const mensaje = ref<string | null>(null)
+const errorModalDesasignacion = ref<string | null>(null)
+const modalDesasignacion = ref({
+  visible: false,
+  procesando: false,
+  detalle: null as ModalDesasignacionDetalle | null,
+})
 
-const obtenerRutasDeDB = async () => {
-  cargando.value = true
-  error.value = null
+const empleadoSeleccionado = computed(() => {
+  return empleadosAsignados.value.find((empleado) => empleado.id_empleado === registro.value.idEmpleado) || null
+})
 
-  try {
-    const headers = await authHeaders()
-    const respuesta = await fetch(`${API_BASE_URL}/api/rutas`, { headers })
-    if (!respuesta.ok) throw new Error(`Falla en API (${respuesta.status})`)
+const rutasProgramadas = computed(() => rutas.value.filter((ruta) => ruta.programada))
 
-    const json = await respuesta.json()
-    rutas.value = Array.isArray(json?.data) ? json.data : []
+const rutasParaTurno = computed(() => {
+  return rutasProgramadas.value.length ? rutasProgramadas.value : rutas.value
+})
 
-    if (rutas.value.length > 0) {
-      const primeraRuta = rutas.value[0]
-      if (primeraRuta) {
-        registro.value.ruta = (primeraRuta.id || primeraRuta.ruta).toString()
-      }
-    }
-  } catch (err: any) {
-    error.value = err.message || 'Error de conexión'
-  } finally {
-    cargando.value = false
+const rutaRecomendada = computed(() => {
+  const candidatas = rutasParaTurno.value
+    .filter((ruta) => (ruta.asientos_disponibles || 0) > 0)
+    .slice()
+    .sort((a, b) => {
+      const diferenciaDisponibles = (b.asientos_disponibles || 0) - (a.asientos_disponibles || 0)
+      if (diferenciaDisponibles !== 0) return diferenciaDisponibles
+      return (a.ruta || 0) - (b.ruta || 0)
+    })
+
+  return candidatas[0] || null
+})
+
+const resumenRutasTurno = computed(() => {
+  if (!rutas.value.length) {
+    return 'No hay rutas registradas para mostrar.'
   }
-}
+
+  if (!rutasProgramadas.value.length) {
+    return `No hay rutas programadas para ${TURNOS_LABEL[registro.value.horario] || registro.value.horario}. Se muestran rutas base para que sigas operando.`
+  }
+
+  return `${rutasProgramadas.value.length} rutas programadas para ${TURNOS_LABEL[registro.value.horario] || registro.value.horario}.`
+})
 
 const rutaSeleccionada = computed(() => {
-  return rutas.value.find(r => (r.id || r.ruta).toString() === registro.value.ruta)
+  return rutasParaTurno.value.find((ruta) => ruta.id === registro.value.ruta) || null
 })
 
 const asientosLibres = computed(() => {
   if (!rutaSeleccionada.value) return 0
-  const ocupados = rutaSeleccionada.value.pasajeros_ids?.length || 0
-  return rutaSeleccionada.value.capacidad_real - ocupados
+  return rutaSeleccionada.value.asientos_disponibles || 0
 })
 
 const isFormReady = computed(() => {
-  return registro.value.idEmpleado !== '' && registro.value.asiento !== null && registro.value.ruta !== ''
+  return (
+    registro.value.idEmpleado !== ''
+    && registro.value.asiento !== null
+    && registro.value.ruta !== ''
+    && !cargandoContexto.value
+  )
 })
 
-const seleccionarAsiento = (n: number) => {
-  if (!rutaSeleccionada.value?.pasajeros_ids?.includes(String(n))) {
+function obtenerIdEmpleadoVisual(empleado: any) {
+  const idPersistido = String(empleado?.id_empleado || '').trim()
+  if (idPersistido) {
+    return idPersistido
+  }
+
+  return `EMP-${String(empleado?.uid || '').slice(-6).toUpperCase()}`
+}
+
+function normalizarRuta(raw: any): Ruta {
+  const capacidadBase = Number(raw?.capacidad_limite) || Number(raw?.capacidad_real) || 30
+  const asientosReservados: number[] = Array.isArray(raw?.asientos_reservados)
+    ? [...new Set<number>(
+      raw.asientos_reservados
+        .map((valor: any) => Number(valor))
+        .filter((valor: number) => Number.isInteger(valor) && valor > 0),
+    )]
+    : []
+  const asientosPorEmpleado: Record<string, number> = {}
+  Object.entries(raw?.asientos_por_empleado || {}).forEach(([idEmpleado, asiento]) => {
+    const id = String(idEmpleado || '').trim()
+    const asientoNumero = Number(asiento)
+    if (id && Number.isInteger(asientoNumero) && asientoNumero > 0) {
+      asientosPorEmpleado[id] = asientoNumero
+    }
+  })
+  const pasajerosIds = Array.isArray(raw?.pasajeros_ids) ? raw.pasajeros_ids : []
+  const asientosOcupadosDato = Number(raw?.asientos_ocupados)
+  const asientosOcupados = Number.isFinite(asientosOcupadosDato)
+    ? asientosOcupadosDato
+    : Math.max(asientosReservados.length, pasajerosIds.length)
+
+  return {
+    id: String(raw?.id || raw?.ruta || ''),
+    ruta: Number(raw?.ruta) || 0,
+    zona: raw?.zona,
+    nombre: raw?.nombre,
+    capacidad_real: Number(raw?.capacidad_real) || capacidadBase,
+    capacidad_limite: capacidadBase,
+    asientos_ocupados: asientosOcupados,
+    asientos_disponibles: Math.max(capacidadBase - asientosOcupados, 0),
+    pasajeros_ids: pasajerosIds,
+    asientos_reservados: asientosReservados,
+    asientos_por_empleado: asientosPorEmpleado,
+    programada: Boolean(raw?.programada),
+  }
+}
+
+function construirEtiquetaRuta(ruta: Ruta) {
+  const nombre = ruta.zona || ruta.nombre || 'Sin nombre'
+  const libres = ruta.asientos_disponibles || 0
+  const estado = ruta.programada ? 'Programada' : 'Base'
+  return `Ruta ${ruta.ruta} - ${nombre} (${libres} libres, ${estado})`
+}
+
+function asegurarRutaSeleccionadaValida() {
+  const rutasActuales = rutasParaTurno.value
+  const rutaExiste = rutasActuales.some((ruta) => ruta.id === registro.value.ruta)
+
+  if (!rutaExiste) {
+    registro.value.ruta = rutaRecomendada.value?.id || rutasActuales[0]?.id || ''
+    registro.value.asiento = null
+  }
+}
+
+async function obtenerHeadersSeguros() {
+  const headers = await authHeaders()
+  if (!headers.Authorization) {
+    throw new Error('Sesión inválida. Inicia sesión nuevamente.')
+  }
+  return headers
+}
+
+async function cargarEmpleadosAsignados() {
+  const headers = await obtenerHeadersSeguros()
+  const respuesta = await fetch(`${API_BASE_URL}/api/empleados`, { headers })
+  const payload = await respuesta.json().catch(() => ({}))
+
+  if (!respuesta.ok) {
+    throw new Error(payload?.message || 'No se pudieron cargar tus empleados asignados.')
+  }
+
+  const empleados = Array.isArray(payload?.data) ? payload.data : []
+  const empleadosNormalizados = empleados
+    .map((empleado: any) => ({
+      uid: String(empleado.uid),
+      id_empleado: obtenerIdEmpleadoVisual(empleado),
+      nombre: String(empleado.nombre || 'Sin nombre'),
+      email: String(empleado.email || 'Sin email'),
+      activo: empleado.activo !== false,
+    }))
+    .sort((a: EmpleadoAsignado, b: EmpleadoAsignado) => a.nombre.localeCompare(b.nombre, 'es'))
+
+  empleadosCatalogo.value = empleadosNormalizados
+  empleadosAsignados.value = empleadosNormalizados.filter((empleado: EmpleadoAsignado) => empleado.activo !== false)
+
+  if (!empleadosAsignados.value.length) {
+    aviso.value = 'No tienes empleados asignados activos. Pide al administrador que asigne al menos uno.'
+    registro.value.idEmpleado = ''
+    return
+  }
+
+  aviso.value = null
+
+  const idSeleccionadoEsValido = empleadosAsignados.value.some(
+    (empleado) => empleado.id_empleado === registro.value.idEmpleado,
+  )
+
+  if (!idSeleccionadoEsValido) {
+    registro.value.idEmpleado = empleadosAsignados.value[0]?.id_empleado || ''
+  }
+}
+
+async function cargarRutasDeDB() {
+  const headers = await obtenerHeadersSeguros()
+  const params = new URLSearchParams({
+    fecha: registro.value.dia,
+    turno: registro.value.horario,
+  })
+
+  const respuestaProgramadas = await fetch(`${API_BASE_URL}/api/rutas/programadas?${params.toString()}`, { headers })
+
+  if (!respuestaProgramadas.ok) {
+    const payloadError = await respuestaProgramadas.json().catch(() => ({}))
+    throw new Error(payloadError?.message || 'No se pudieron cargar rutas por turno y día.')
+  }
+
+  const payloadProgramadas = await respuestaProgramadas.json().catch(() => ({}))
+  const rutasRecibidas = Array.isArray(payloadProgramadas?.data) ? payloadProgramadas.data : []
+
+  rutas.value = rutasRecibidas.map(normalizarRuta)
+  asegurarRutaSeleccionadaValida()
+}
+
+function obtenerEmpleadoPorId(idEmpleado: string) {
+  return empleadosCatalogo.value.find((empleado) => empleado.id_empleado === idEmpleado) || null
+}
+
+function obtenerIdEmpleadoEnAsiento(ruta: Ruta, asiento: number) {
+  const asientoPorEmpleado = ruta.asientos_por_empleado || {}
+  const entrada = Object.entries(asientoPorEmpleado).find(([, asientoActual]) => Number(asientoActual) === asiento)
+  if (entrada) {
+    return entrada[0]
+  }
+
+  const asientos = ruta.asientos_reservados || []
+  const pasajeros = ruta.pasajeros_ids || []
+  if (asientos.length === pasajeros.length) {
+    const indice = asientos.findIndex((asientoActual) => asientoActual === asiento)
+    if (indice >= 0) {
+      return pasajeros[indice] || null
+    }
+  }
+
+  return null
+}
+
+function cerrarModalDesasignacion() {
+  modalDesasignacion.value.visible = false
+  modalDesasignacion.value.procesando = false
+  modalDesasignacion.value.detalle = null
+  errorModalDesasignacion.value = null
+}
+
+function abrirModalDesasignacion(asiento: number) {
+  const ruta = rutaSeleccionada.value
+  if (!ruta) return
+
+  const idEmpleado = obtenerIdEmpleadoEnAsiento(ruta, asiento)
+  if (!idEmpleado) {
+    aviso.value = 'No se pudo identificar al empleado en ese asiento. Recarga las rutas y vuelve a intentar.'
+    return
+  }
+
+  const empleado = obtenerEmpleadoPorId(idEmpleado)
+  const turnoTexto = TURNOS_LABEL[registro.value.horario] || registro.value.horario
+
+  modalDesasignacion.value.detalle = {
+    id_empleado: idEmpleado,
+    nombre: empleado?.nombre || 'Empleado asignado',
+    email: empleado?.email || 'Sin email disponible',
+    asiento,
+    ruta: construirEtiquetaRuta(ruta),
+    fecha: registro.value.dia,
+    turno: turnoTexto,
+  }
+  modalDesasignacion.value.visible = true
+  modalDesasignacion.value.procesando = false
+  errorModalDesasignacion.value = null
+  registro.value.asiento = null
+}
+
+const manejarClickAsiento = (n: number) => {
+  const asientosOcupados = rutaSeleccionada.value?.asientos_reservados || []
+  if (asientosOcupados.includes(n)) {
+    abrirModalDesasignacion(n)
+    return
+  }
+
+  if (rutaSeleccionada.value) {
     registro.value.asiento = n
   }
 }
 
 const getSeatClass = (n: number) => {
-  if (rutaSeleccionada.value?.pasajeros_ids?.includes(String(n))) return 'occupied'
+  if (rutaSeleccionada.value?.asientos_reservados?.includes(n)) return 'occupied'
   if (registro.value.asiento === n) return 'selected'
   return 'free'
 }
 
 const confirmarAsignacion = async () => {
-  if (!isFormReady.value) return
+  if (!isFormReady.value || !rutaSeleccionada.value || registro.value.asiento === null) return
+
+  procesandoAsignacion.value = true
+  error.value = null
+  mensaje.value = null
 
   try {
-    const headers = await authHeaders()
+    const headers = await obtenerHeadersSeguros()
     const respuesta = await fetch(`${API_BASE_URL}/api/asignar`, {
       method: 'POST',
       headers: {
@@ -200,8 +514,10 @@ const confirmarAsignacion = async () => {
       },
       body: JSON.stringify({
         id_empleado: registro.value.idEmpleado,
-        id_ruta: registro.value.ruta,
+        id_ruta: rutaSeleccionada.value.id,
         fecha: registro.value.dia,
+        turno: registro.value.horario,
+        asiento: registro.value.asiento,
       }),
     })
 
@@ -210,19 +526,60 @@ const confirmarAsignacion = async () => {
       throw new Error(payload?.message || 'No se pudo registrar la asignación.')
     }
 
-    const ruta = rutaSeleccionada.value
-    if (ruta) {
-      if (!ruta.pasajeros_ids) ruta.pasajeros_ids = []
-      ruta.pasajeros_ids.push(registro.value.idEmpleado)
-    }
+    const asientoAsignado = registro.value.asiento
+    const empleadoAsignado = registro.value.idEmpleado
 
-    mensaje.value = `Empleado ${registro.value.idEmpleado} asignado correctamente.`
+    mensaje.value = `Empleado ${empleadoAsignado} asignado al asiento ${asientoAsignado}.`
     error.value = null
     registro.value.asiento = null
-    registro.value.idEmpleado = ''
+
+    await cargarRutasDeDB()
   } catch (err: any) {
     error.value = err.message || 'No se pudo registrar la asignación.'
     mensaje.value = null
+  } finally {
+    procesandoAsignacion.value = false
+  }
+}
+
+const confirmarDesasignacion = async () => {
+  const detalle = modalDesasignacion.value.detalle
+  const ruta = rutaSeleccionada.value
+  if (!detalle || !ruta) return
+
+  modalDesasignacion.value.procesando = true
+  errorModalDesasignacion.value = null
+
+  try {
+    const headers = await obtenerHeadersSeguros()
+    const respuesta = await fetch(`${API_BASE_URL}/api/asignar/cancelar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify({
+        id_empleado: detalle.id_empleado,
+        id_ruta: ruta.id,
+        fecha: registro.value.dia,
+        turno: registro.value.horario,
+        asiento: detalle.asiento,
+      }),
+    })
+
+    const payload = await respuesta.json().catch(() => ({}))
+    if (!respuesta.ok) {
+      throw new Error(payload?.message || 'No se pudo eliminar la asignación del asiento.')
+    }
+
+    mensaje.value = `Asignación eliminada para ${detalle.id_empleado} en asiento ${detalle.asiento}.`
+    error.value = null
+    cerrarModalDesasignacion()
+    await cargarRutasDeDB()
+  } catch (err: any) {
+    errorModalDesasignacion.value = err.message || 'No se pudo eliminar la asignación.'
+  } finally {
+    modalDesasignacion.value.procesando = false
   }
 }
 
@@ -230,7 +587,38 @@ const salir = () => {
   logout().finally(() => router.push('/login'))
 }
 
-onMounted(obtenerRutasDeDB)
+async function cargarContextoInicial() {
+  cargandoContexto.value = true
+  error.value = null
+
+  try {
+    await Promise.all([cargarEmpleadosAsignados(), cargarRutasDeDB()])
+  } catch (err: any) {
+    error.value = err.message || 'No se pudo cargar el contexto del panel de jefe.'
+  } finally {
+    cargandoContexto.value = false
+  }
+}
+
+watch(
+  [() => registro.value.dia, () => registro.value.horario],
+  async () => {
+    if (cargandoContexto.value) {
+      return
+    }
+
+    try {
+      error.value = null
+      mensaje.value = null
+      cerrarModalDesasignacion()
+      await cargarRutasDeDB()
+    } catch (err: any) {
+      error.value = err.message || 'No se pudieron actualizar las rutas para el turno seleccionado.'
+    }
+  },
+)
+
+onMounted(cargarContextoInicial)
 </script>
 
 <style scoped>
@@ -243,6 +631,9 @@ onMounted(obtenerRutasDeDB)
 .btn-logout:hover { background: #fef2f2; }
 
 .dashboard-grid { display: grid; grid-template-columns: 1fr 420px; gap: 2.5rem; padding: 2.5rem 3rem; }
+@media (max-width: 1024px) {
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
 .section-card { background: #fff; border-radius: 16px; padding: 2rem; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
 /* BUS TACTICAL MAP */
@@ -262,12 +653,15 @@ onMounted(obtenerRutasDeDB)
 
 .seat { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: 0.2s; border: 1px solid #e2e8f0; background: #fff; }
 .seat.selected { background: #2563eb; color: #fff; border-color: #1e40af; transform: scale(1.05); }
-.seat.occupied { background: #94a3b8; color: #fff; border-color: #64748b; cursor: not-allowed; }
+.seat.occupied { background: #94a3b8; color: #fff; border-color: #64748b; cursor: pointer; }
 .seat:hover:not(.occupied) { border-color: #2563eb; color: #2563eb; }
+.seat.occupied:hover { opacity: 0.9; }
 
 /* FORM STYLING */
 h3 { margin: 0 0 0.5rem 0; font-size: 1.25rem; }
 .subtitle { color: #64748b; font-size: 0.9rem; margin-bottom: 2rem; }
+.helper-note { margin: 0.5rem 0 0; color: #64748b; font-size: 0.8rem; }
+.status-info { margin-top: 0.8rem; color: #1d4ed8; font-size: 0.85rem; font-weight: 500; }
 .form-group { margin-bottom: 1.5rem; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 0.5rem; text-transform: uppercase; }
@@ -279,7 +673,61 @@ label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; mar
 .btn-confirm:hover:not(:disabled) { background: #0f172a; }
 .btn-confirm:disabled { background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }
 .btn-report { width: 100%; background: none; border: 1px solid #e2e8f0; color: #64748b; padding: 0.9rem; border-radius: 10px; margin-top: 0.8rem; cursor: pointer; font-weight: 500; }
+.btn-secondary { background: #f8fafc; color: #334155; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0.7rem 1rem; cursor: pointer; font-weight: 600; }
+.btn-danger { background: #b91c1c; color: #fff; border: 1px solid #991b1b; border-radius: 10px; padding: 0.7rem 1rem; cursor: pointer; font-weight: 700; }
+.btn-danger:disabled, .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
 .stats-footer { margin-top: 1.5rem; text-align: center; font-size: 0.85rem; color: #94a3b8; }
 .status-ok { margin-top: 1rem; color: #166534; font-weight: 600; }
 .status-error { margin-top: 1rem; color: #b91c1c; font-weight: 600; }
+.crud-section { padding: 0 3rem 2.5rem; }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 50;
+}
+
+.modal-card {
+  width: min(520px, 100%);
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 10px 40px rgba(15, 23, 42, 0.25);
+  padding: 1.25rem 1.25rem 1rem;
+}
+
+.modal-card h4 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #0f172a;
+}
+
+.modal-detail-grid {
+  margin-top: 0.9rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.9rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: #334155;
+}
+
+.modal-detail-grid p {
+  margin: 0;
+}
+
+.modal-actions {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
 </style>

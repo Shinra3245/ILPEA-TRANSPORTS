@@ -5,7 +5,9 @@
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "build:frontend": "npm --prefix frontend run build",
-    "check:frontend": "npm --prefix frontend run type-check"
+    "check:frontend": "npm --prefix frontend run type-check",
+    "backfill:empleados:id": "node backfill-id-empleados.js",
+    "seed:accesos": "node seed-accesos-paneles.js"
   },
   "dependencies": {
     "firebase-admin": "^13.8.0",

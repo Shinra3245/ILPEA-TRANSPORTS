@@ -3,6 +3,7 @@
     <aside class="sidebar">
       <div class="brand">ILPEA <span>ADMIN</span></div>
       <nav class="nav-menu">
+
         <button 
           @click="irADashboard" 
           :class="['nav-item', { active: $route.path === '/admin' }]">
@@ -35,25 +36,30 @@
         </div>
       </header>
 
-      <section class="ia-container">
-        <RecomendacionesIA />
-      </section>
-
       <div v-if="cargando" class="status-box">Sincronizando con Backend...</div>
       <div v-else-if="error" class="status-box error-msg">
         <p>⚠️ {{ error }}</p>
         <button @click="obtenerRutas" class="btn-retry">Reintentar Conexión</button>
       </div>
 
-      <div v-else class="dashboard-visuals">
-        <div class="charts-filter">
-          <label for="chart-select">Visualización:</label>
-          <select id="chart-select" v-model="selectedChart" class="minimal-select">
-            <option value="todos">Todos los indicadores</option>
-            <option value="ocupacion">Ocupación por Ruta</option>
-            <option value="capacidad">Distribución de Capacidad</option>
-            <option value="alertas">Estado de Alertas</option>
-          </select>
+      <template v-else>
+        <section class="ia-container">
+          <RecomendacionesIA />
+        </section>
+
+        <div class="tools-bar">
+          <div class="charts-filter">
+            <label for="chart-select">Visualización:</label>
+            <select id="chart-select" v-model="selectedChart" class="minimal-select">
+              <option value="todos">Todos los indicadores</option>
+              <option value="ocupacion">Ocupación por Ruta</option>
+              <option value="capacidad">Distribución de Capacidad</option>
+              <option value="alertas">Estado de Alertas</option>
+            </select>
+          </div>
+          <button @click="exportarTodosPDF" :disabled="cargando || !!error" class="btn-exportar">
+            📄 Exportar PDF
+          </button>
         </div>
 
         <div class="charts-grid">
@@ -111,7 +117,7 @@
             </table>
           </div>
         </div>
-      </div>
+      </template>
     </main>
   </div>
 </template>
