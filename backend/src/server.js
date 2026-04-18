@@ -2,6 +2,7 @@
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
+const nodemailer = require('nodemailer');
 const path = require('path');
 const crypto = require('crypto');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
@@ -46,6 +47,111 @@ function generarPasswordTemporal(longitud = 12) {
   }
 
   return resultado;
+}
+
+let smtpTransporter = null;
+
+function escapeHtml(valor) {
+  return String(valor || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function obtenerTransporterSMTP() {
+  if (smtpTransporter) {
+    return smtpTransporter;
+  }
+
+  const host = String(process.env.MAIL_HOST || '').trim();
+  const user = String(process.env.MAIL_USER || '').trim();
+  const pass = String(process.env.MAIL_PASS || '').trim();
+  const port = Number(process.env.MAIL_PORT || 465);
+  const secure = String(process.env.MAIL_SECURE || 'true').trim().toLowerCase() !== 'false';
+
+  if (!host || !user || !pass) {
+    return null;
+  }
+
+  smtpTransporter = nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: {
+      user,
+      pass
+    }
+  });
+
+  return smtpTransporter;
+}
+
+async function enviarCorreoAltaEmpleado({ nombre, email, idEmpleado, password }) {
+  const transporter = obtenerTransporterSMTP();
+  if (!transporter) {
+    return {
+      enviado: false,
+      motivo: 'SMTP_NO_CONFIGURADO'
+    };
+  }
+
+  const remitenteEmail = String(process.env.MAIL_FROM_EMAIL || process.env.MAIL_USER || '').trim();
+  const remitenteNombre = String(process.env.MAIL_FROM_NAME || 'ILPEA TRANSPORTS').trim();
+
+  const nombreSeguro = escapeHtml(nombre);
+  const emailSeguro = escapeHtml(email);
+  const idSeguro = escapeHtml(idEmpleado);
+  const passwordSeguro = escapeHtml(password);
+
+  const asunto = 'Credenciales de acceso - ILPEA TRANSPORTS';
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #111827;">
+      <h2 style="margin-bottom: 8px;">Bienvenido(a) a ILPEA TRANSPORTS</h2>
+      <p>Se ha creado tu usuario con los siguientes datos:</p>
+      <ul>
+        <li><strong>ID de empleado:</strong> ${idSeguro}</li>
+        <li><strong>Nombre:</strong> ${nombreSeguro}</li>
+        <li><strong>Correo:</strong> ${emailSeguro}</li>
+        <li><strong>Contraseña temporal:</strong> ${passwordSeguro}</li>
+      </ul>
+      <p>Por seguridad, cambia tu contraseña después de iniciar sesión.</p>
+      <hr style="border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">Este es un mensaje automático, por favor no respondas este correo.</p>
+    </div>
+  `;
+
+  const text = [
+    'Bienvenido(a) a ILPEA TRANSPORTS.',
+    'Se ha creado tu usuario con los siguientes datos:',
+    `ID de empleado: ${idEmpleado}`,
+    `Nombre: ${nombre}`,
+    `Correo: ${email}`,
+    `Contrasena temporal: ${password}`,
+    'Por seguridad, cambia tu contrasena despues de iniciar sesion.'
+  ].join('\n');
+
+  try {
+    await transporter.sendMail({
+      from: remitenteEmail ? `"${remitenteNombre}" <${remitenteEmail}>` : undefined,
+      to: email,
+      subject: asunto,
+      html,
+      text
+    });
+
+    return {
+      enviado: true,
+      motivo: null
+    };
+  } catch (error) {
+    console.warn('No se pudo enviar correo de alta de empleado:', error.message);
+    return {
+      enviado: false,
+      motivo: 'SMTP_ENVIO_FALLIDO'
+    };
+  }
 }
 
 function formatearValorPorcentaje(valor, decimales = 2) {
@@ -2585,13 +2691,23 @@ app.post('/api/empleados', autorizar('empleados:crear'), async (req, res) => {
       activo: true
     });
 
+    const notificacionCorreo = await enviarCorreoAltaEmpleado({
+      nombre: String(nombre).trim(),
+      email: String(email).trim(),
+      idEmpleado: idEmpleadoFinal,
+      password: passwordFinal
+    });
+
     res.status(201).json({
       success: true,
-      message: 'Empleado creado exitosamente.',
+      message: notificacionCorreo.enviado
+        ? 'Empleado creado exitosamente y correo enviado.'
+        : 'Empleado creado exitosamente. No se pudo enviar el correo de credenciales.',
       credenciales_generadas: {
         id_empleado: idEmpleadoFinal,
         password_temporal: passwordManual ? null : passwordFinal
       },
+      notificacion_email: notificacionCorreo,
       usuario: {
         uid: userRecord.uid,
         id_empleado: idEmpleadoFinal,
