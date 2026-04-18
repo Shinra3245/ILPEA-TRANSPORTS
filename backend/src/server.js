@@ -2,6 +2,8 @@
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 // 1. Inicializar Firebase Admin usando nuestra llave local
 const serviceAccount = require('../config/firebase-key.json');
@@ -12,6 +14,48 @@ admin.initializeApp({
 
 const db = admin.firestore();
 const app = express();
+
+function crearClienteOpenAI() {
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+
+  try {
+    const OpenAI = require('openai');
+    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  } catch (error) {
+    console.warn('OpenAI deshabilitado: paquete no instalado o error de carga.');
+    return null;
+  }
+}
+
+const openai = crearClienteOpenAI();
+
+function generarRespuestaFallback(mensajeUsuario, rutas) {
+  const totalRutas = rutas.length;
+  const rutasCriticas = rutas.filter((r) => Number(r.porcentaje_ocupacion_max) < 40);
+  const rutasRightSizing = rutas.filter(
+    (r) =>
+      String(r['tipo de unidad'] || '').toLowerCase().includes('autobus') &&
+      Number(r.max_pasajeros_dia) <= 12
+  );
+
+  const consulta = String(mensajeUsuario || '').toLowerCase();
+
+  if (consulta.includes('critica') || consulta.includes('cancel') || consulta.includes('40')) {
+    if (!rutasCriticas.length) return 'No hay rutas en condición crítica (< 40%) con la data actual.';
+    const listado = rutasCriticas.map((r) => `Ruta ${r.ruta} (${r.porcentaje_ocupacion_max}%)`).join(', ');
+    return `Rutas críticas detectadas: ${listado}. Recomiendo revisión operativa inmediata.`;
+  }
+
+  if (consulta.includes('van') || consulta.includes('right') || consulta.includes('unidad')) {
+    if (!rutasRightSizing.length) return 'No hay rutas candidatas claras para cambio de unidad en este momento.';
+    const listado = rutasRightSizing.map((r) => `Ruta ${r.ruta}`).join(', ');
+    return `Rutas candidatas a right-sizing (Autobús -> Van): ${listado}.`;
+  }
+
+  return `Resumen rápido: ${totalRutas} rutas analizadas, ${rutasCriticas.length} con ocupación menor a 40% y ${rutasRightSizing.length} candidatas a right-sizing.`;
+}
 
 // Middlewares
 app.use(cors());
@@ -112,18 +156,78 @@ app.post('/api/rutas/sync', async (req, res) => {
   }
 });
 
-// Inicializar el servidor
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor ILPEA corriendo en http://localhost:${PORT}`);
-  console.log(`Conectado a Firebase Project: ${serviceAccount.project_id}`);
-});
+// ==========================================
+// ENDPOINT 4: Chat Operativo (Copiloto)
+// ==========================================
+app.post('/api/chat', async (req, res) => {
+  const { mensaje_usuario } = req.body || {};
 
+  if (!mensaje_usuario || !String(mensaje_usuario).trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Debes enviar un mensaje en el campo mensaje_usuario.'
+    });
+  }
+
+  try {
+    const snapshot = await db.collection('rutas').get();
+    const rutas = [];
+    snapshot.forEach((doc) => rutas.push(doc.data()));
+
+    if (!openai) {
+      return res.status(200).json({
+        success: true,
+        respuesta: generarRespuestaFallback(mensaje_usuario, rutas)
+      });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Eres un copiloto logístico de ILPEA. Responde en español con recomendaciones breves, accionables y orientadas a operación de rutas.'
+        },
+        {
+          role: 'user',
+          content: `Consulta del jefe: ${mensaje_usuario}\n\nDatos de rutas actuales: ${JSON.stringify(rutas)}`
+        }
+      ],
+      temperature: 0.2
+    });
+
+    const respuestaIA = completion.choices?.[0]?.message?.content?.trim();
+
+    if (!respuestaIA) {
+      return res.status(200).json({
+        success: true,
+        respuesta: generarRespuestaFallback(mensaje_usuario, rutas)
+      });
+    }
+
+    res.status(200).json({ success: true, respuesta: respuestaIA });
+  } catch (error) {
+    console.error('Error en /api/chat:', error);
+    res.status(500).json({
+      success: false,
+      message: 'No fue posible generar respuesta del copiloto.'
+    });
+  }
+});
 
 // ==========================================
 // ENDPOINT 5: Insights Automáticos (Proactivo)
 // ==========================================
 app.get('/api/insights-automaticos', async (req, res) => {
+  if (!openai) {
+    return res.status(503).json({
+      success: false,
+      message: 'OpenAI no está configurado. Define OPENAI_API_KEY en backend/.env y reinicia el servidor.',
+      insights: []
+    });
+  }
+
   try {
     // 1. Extraemos TODAS las rutas de Firebase
     const snapshot = await db.collection('rutas').get();
@@ -143,7 +247,7 @@ app.get('/api/insights-automaticos', async (req, res) => {
 
     // 3. Consulta a OpenAI enviando el prompt y los datos de Firebase
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo-1106", 
+      model: 'gpt-4o-mini', 
       response_format: { type: "json_object" }, 
       messages: [
         { role: "system", content: systemPrompt },
@@ -153,11 +257,29 @@ app.get('/api/insights-automaticos', async (req, res) => {
     });
 
     // 4. Se lo enviamos procesado al Frontend
-    const dataIA = JSON.parse(completion.choices[0].message.content);
-    res.json({ success: true, insights: dataIA.insights });
+    const rawContent = completion.choices?.[0]?.message?.content;
+    const dataIA = rawContent ? JSON.parse(rawContent) : null;
+    const insights = Array.isArray(dataIA?.insights) ? dataIA.insights : [];
+
+    if (!insights.length) {
+      return res.status(502).json({
+        success: false,
+        message: 'La IA respondió sin insights válidos. Intenta de nuevo.',
+        insights: []
+      });
+    }
+
+    res.json({ success: true, insights });
 
   } catch (error) {
     console.error("Error generando insights:", error);
     res.status(500).json({ success: false, message: "Error conectando con la IA" });
   }
+});
+
+// Inicializar el servidor
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor ILPEA corriendo en http://localhost:${PORT}`);
+  console.log(`Conectado a Firebase Project: ${serviceAccount.project_id}`);
 });
