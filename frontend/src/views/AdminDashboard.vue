@@ -159,6 +159,8 @@
         </div>
       </div>
     </main>
+
+    <CopilotoChat scope="ADMIN" />
   </div>
 </template>
 
@@ -174,8 +176,9 @@ import RecomendacionesIA from '../components/RecomendacionesIA.vue';
 import ChartOcupacion from '../components/ChartOcupacion.vue';
 import ChartCapacidad from '../components/ChartCapacidad.vue';
 import ChartAlertas from '../components/ChartAlertas.vue';
+import CopilotoChat from '../components/CopilotoChat.vue';
 
-// Interfaces existentes
+// --- INTERFACES ---
 interface Ruta {
   id: string;
   ruta: number;
@@ -198,8 +201,28 @@ interface PlanIA {
   motivo: string | null;
 }
 
+// Nueva interfaz basada en la imagen proporcionada (Catálogo Asignaciones)
+interface UsuarioAsignado {
+  num_control: string;
+  nombre: string;
+  puesto: string;
+  dpto: string;
+  turno: string;
+  empresa: string;
+  horario_entrada: string;
+  horario_salida: string;
+  dias_trabajo: string;
+  domicilio: string;
+  colonia: string;
+  referencia: string;
+  ruta_asignada: string; // Columna M en la imagen
+  parada_asignada: string;
+  estatus: string;
+}
+
 type RutaApi = Partial<Ruta> & Record<string, unknown>;
 
+// --- ESTADOS REACtivos ---
 const rutas = ref<Ruta[]>([]);
 const cargando = ref(true);
 const error = ref<string | null>(null);
@@ -211,6 +234,11 @@ const planesIA = ref<PlanIA[]>([]);
 const cargandoPlanes = ref(false);
 const errorPlanes = ref<string | null>(null);
 
+// Estados de carga específicos para las exportaciones
+const exportandoExcel = ref(false);
+const exportandoAsignaciones = ref(false); // Estado para el segundo botón
+
+// --- UTILIDADES ---
 const numeroSeguro = (valor: unknown, fallback = 0): number => {
   const numero = Number(valor);
   return Number.isFinite(numero) ? numero : fallback;
@@ -230,34 +258,22 @@ const normalizarRuta = (ruta: RutaApi): Ruta => ({
 const obtenerOcupacionSegura = (ruta: Ruta): number => numeroSeguro(ruta.porcentaje_ocupacion_max, 0);
 const formatearOcupacion = (ruta: Ruta): string => obtenerOcupacionSegura(ruta).toFixed(1);
 
-// Estados de carga para exportaciones
-const exportandoExcel = ref(false);
-const exportandoAsignaciones = ref(false);
-
+// --- MÉTODOS API (Frente 2) ---
 const obtenerRutas = async () => {
   cargando.value = true;
   error.value = null;
 
   try {
     const headers = await authHeaders();
-    if (!headers.Authorization) {
-      throw new Error('Sesión inválida. Inicia sesión de nuevo.');
-    }
-
     const respuesta = await fetch(`${API_BASE_URL}/api/rutas`, { headers });
-    
-    if (!respuesta.ok) {
-      throw new Error(`No fue posible cargar rutas (status ${respuesta.status}).`);
-    }
-    
+    if (!respuesta.ok) throw new Error(`Error ${respuesta.status}`);
     const json = await respuesta.json();
     const data = Array.isArray(json?.data) ? json.data : [];
     rutas.value = data
       .map((ruta: RutaApi) => normalizarRuta(ruta))
       .sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
   } catch (err: any) {
-    console.error('Falla en API:', err);
-    error.value = err.message || 'No se pudieron cargar las rutas.';
+    error.value = err.message || 'Error al cargar rutas.';
   } finally {
     cargando.value = false;
   }
@@ -266,20 +282,11 @@ const obtenerRutas = async () => {
 const obtenerPlanesIA = async () => {
   cargandoPlanes.value = true;
   errorPlanes.value = null;
-
   try {
     const headers = await authHeaders();
-    if (!headers.Authorization) {
-      throw new Error('Sesion invalida. Inicia sesion de nuevo.');
-    }
-
     const respuesta = await fetch(`${API_BASE_URL}/api/ai/planes-ejecutados?limit=6`, { headers });
     const json = await respuesta.json();
-
-    if (!respuesta.ok || !json?.success) {
-      throw new Error(json?.message || 'No fue posible cargar planes IA ejecutados.');
-    }
-
+    if (!respuesta.ok || !json?.success) throw new Error(json?.message || 'Error en planes IA');
     const data = Array.isArray(json?.data) ? json.data : [];
     planesIA.value = data.map((plan: any) => ({
       id: String(plan.id ?? ''),
@@ -288,78 +295,65 @@ const obtenerPlanesIA = async () => {
       ruta_origen_id: String(plan.ruta_origen_id ?? 'N/D'),
       ruta_destino_id: String(plan.ruta_destino_id ?? 'N/D'),
       cantidad_empleados_movidos: numeroSeguro(plan.cantidad_empleados_movidos, 0),
-      estado_impacto: (['alto', 'medio', 'bajo'].includes(String(plan.estado_impacto))
-        ? String(plan.estado_impacto)
-        : 'bajo') as 'alto' | 'medio' | 'bajo',
+      estado_impacto: (['alto', 'medio', 'bajo'].includes(String(plan.estado_impacto)) ? plan.estado_impacto : 'bajo'),
       motivo: plan.motivo ? String(plan.motivo) : null
     }));
   } catch (err: any) {
-    console.error('Falla obteniendo planes IA:', err);
-    errorPlanes.value = err.message || 'No se pudieron cargar planes IA ejecutados.';
+    errorPlanes.value = err.message || 'Error en planes IA.';
     planesIA.value = [];
   } finally {
     cargandoPlanes.value = false;
   }
 };
 
-const exportandoExcel = ref(false);
+// --- EXPORTACIONES (ExcelJS) ---
 
-const exportarTablaExcel = () => {
+// Función 1: Exportar Programación Operativa (Rutas)
+const exportarTablaExcel = async () => {
   exportandoExcel.value = true;
-  
   try {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Programación de Rutas');
 
-    // 1. Encabezado Corporativo (Negro)
+    // Estilos Corporativos (Encabezado Negro)
     worksheet.mergeCells('A1:E1');
     const titleCell = worksheet.getCell('A1');
     titleCell.value = 'ILPEA - PROGRAMACIÓN DE RUTAS'; 
     titleCell.font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
     titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
-    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    titleCell.alignment = { horizontal: 'center' };
 
-    // 2. Columnas
+    // Columnas y Encabezados (Verde)
     worksheet.columns = [
-      { header: 'RUTA', key: 'ruta', width: 12 },
-      { header: 'UNIDAD', key: 'unidad', width: 18 },
+      { header: 'RUTA', key: 'ruta', width: 15 },
+      { header: 'UNIDAD', key: 'unidad', width: 20 },
       { header: 'CAPACIDAD', key: 'cap', width: 15 },
-      { header: 'OCUPACIÓN (%)', key: 'ocupacion', width: 18 },
-      { header: 'ESTADO DE RUTA', key: 'estado', width: 25 }
+      { header: 'OCUPACIÓN (%)', key: 'ocupacion', width: 20 },
+      { header: 'ESTADO IA', key: 'estado', width: 25 }
     ];
 
-    // 3. Estilo Encabezados (Verde)
     const headerRow = worksheet.getRow(2);
-    headerRow.values = ['RUTA', 'TIPO UNIDAD', 'CAP. REAL', '% OCUPACIÓN', 'ESTADO DE RUTA'];
     headerRow.eachCell((cell) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF107C41' } };
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
-      cell.alignment = { horizontal: 'center' };
     });
 
-    // 4. Datos
+    // Datos
     rutas.value.forEach(ruta => {
-      const porcentaje = ruta.porcentaje_ocupacion_max;
-      const estadoOperativo = porcentaje < 40 ? 'CANCELADA' : 'ACTIVADA';
-      
-      return [
-        `"Ruta ${ruta.ruta}"`,
-        `"${ruta['tipo de unidad']}"`,
-        ruta.capacidad_real,
-        obtenerOcupacionSegura(ruta).toFixed(2),
-        `"${ruta.sugerencia_right_sizing}"`,
-        `"${estadoOperativo}"`
-      ].join(','); 
+      worksheet.addRow({
+        ruta: `Ruta ${ruta.ruta}`,
+        unidad: ruta['tipo de unidad'],
+        cap: ruta.capacidad_real,
+        ocupacion: `${obtenerOcupacionSegura(ruta).toFixed(2)}%`,
+        estado: ruta.sugerencia_right_sizing
+      });
     });
 
     const buffer = await workbook.xlsx.writeBuffer();
-    const fechaHoy = new Date().toLocaleDateString('es-ES').replace(/\//g, '-');
-    saveAs(new Blob([buffer]), `Programacion_de_Rutas_ILPEA_${fechaHoy}.xlsx`);
-
+    saveAs(new Blob([buffer]), `Programacion_Rutas_ILPEA_${new Date().toISOString().slice(0,10)}.xlsx`);
   } catch (error) {
-    console.error('Error Excel:', error);
-    alert('Error al exportar programación de rutas.');
+    console.error(error);
+    alert('Error al exportar rutas.');
   } finally {
     exportandoExcel.value = false;
   }
@@ -469,10 +463,12 @@ const exportarAsignacionesExcel = async () => {
       row.getCell('ruta_asignada').alignment = { horizontal: 'center', vertical: 'middle' };
       row.getCell('estatus').alignment = { horizontal: 'center', vertical: 'middle' };
 
-      // Resaltado visual para "SIN RUTA"
+      // --- RESALTADO CONDICIONAL (Clave de la imagen) ---
+      // Si la RUTA ASIGNADA (Columna M) es "SIN RUTA", aplicamos texto rojo y fondo rosa pálido
       if (asig.ruta_asignada === 'SIN RUTA') {
-         row.getCell('ruta_asignada').font = { color: { argb: 'FFFF0000' }, bold: true };
-         row.getCell('ruta_asignada').fill = { type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFFEE2E2'} };
+         // Accedemos a la celda específica M (columna 13)
+         row.getCell('ruta_asignada').font = { color: { argb: 'FFFF0000' }, bold: true }; // Rojo bold
+         row.getCell('ruta_asignada').fill = { type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFFEE2E2'} }; // Rosa suave alert
       }
     });
 
@@ -489,11 +485,10 @@ const exportarAsignacionesExcel = async () => {
   }
 };
 
+// --- NAVEGACIÓN ---
 const irADashboard = () => router.push('/admin');
 const irARutasApi = () => router.push('/admin/rutas');
-const irAUsuarios = () => {
-  router.push('/admin/usuarios');
-};
+const irAUsuarios = () => router.push('/admin/usuarios');
 
 const cerrarSesion = async () => {
   const { logout } = useAuth();
@@ -501,6 +496,7 @@ const cerrarSesion = async () => {
   router.push('/login');
 };
 
+// --- CICLO DE VIDA ---
 onMounted(() => {
   obtenerRutas();
   obtenerPlanesIA();
@@ -539,13 +535,13 @@ onMounted(() => {
 .assignments-btn { background: #1e3a8a; } 
 .assignments-btn:hover { background: #1e40af; }
 
+/* Resto de estilos intactos... */
 .charts-filter { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
 .minimal-select { padding: 0.5rem; border-radius: 6px; border: 1px solid #ddd; outline: none; background: #fff; }
 .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem; margin-bottom: 3rem; }
 .chart-item { background: #fff; padding: 1.5rem; border-radius: 12px; border: 1px solid #e0e0e0; min-height: 300px; }
 .chart-item-small { grid-column: span 1; }
 .section-title { font-size: 1.1rem; margin-bottom: 1rem; color: #333; }
-
 .ia-block { margin-bottom: 2rem; }
 .section-header-inline { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .planes-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
@@ -553,7 +549,6 @@ onMounted(() => {
 .plan-card h4 { margin: 0; font-size: 1rem; color: #1f2937; }
 .plan-card p { margin: 0.35rem 0; font-size: 0.88rem; color: #374151; }
 .plan-card-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.75rem; }
-
 .pdf-wrapper { background-color: #ffffff; padding: 1.5rem; border-radius: 8px; }
 .table-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 0; }
 .minimal-table { width: 100%; border-collapse: collapse; }
@@ -571,7 +566,6 @@ onMounted(() => {
 .impact-alto { background: #fff1f2; color: #991b1b; border: 1px solid #fecdd3; }
 .impact-medio { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
 .impact-bajo { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-
 .status-box { padding: 4rem; text-align: center; color: #888; }
 .error-msg { color: #ef4444; }
 .btn-manage { background: none; border: 1px solid #ddd; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }

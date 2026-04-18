@@ -211,6 +211,8 @@
         </div>
       </div>
     </section>
+
+    <CopilotoChat scope="JEFE" :contexto="{ fecha: registro.dia, turno: registro.horario }" />
   </div>
 </template>
 
@@ -219,6 +221,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue'
+import CopilotoChat from '../components/CopilotoChat.vue'
 
 interface EmpleadoAsignado {
   uid: string;

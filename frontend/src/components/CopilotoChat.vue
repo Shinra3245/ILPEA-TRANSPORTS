@@ -27,7 +27,7 @@
         <input 
           v-model="inputMensaje" 
           type="text" 
-          placeholder="Pregunta sobre rutas o asignaciones..." 
+          :placeholder="placeholderInput" 
           :disabled="cargando"
         />
         <button type="submit" :disabled="!inputMensaje || cargando">Enviar</button>
@@ -37,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { useAuth } from '../composables/useAuth';
 
 interface Mensaje {
@@ -45,14 +45,52 @@ interface Mensaje {
   text: string;
 }
 
+interface ContextoChat {
+  fecha?: string;
+  turno?: string;
+}
+
+const props = defineProps<{
+  scope?: 'ADMIN' | 'JEFE';
+  contexto?: ContextoChat;
+}>();
+
 const chatAbierto = ref(false);
 const inputMensaje = ref('');
-const historial = ref<Mensaje[]>([
-  { role: 'bot', text: '¡Hola! Soy tu Copiloto Logístico. ¿En qué puedo ayudarte con las rutas hoy?' }
-]);
+const historialDiv = ref<HTMLElement | null>(null);
 const cargando = ref(false);
 const { authHeaders } = useAuth();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+
+const placeholderInput = computed(() =>
+  props.scope === 'JEFE'
+    ? 'Pregunta por empleados, turnos o reasignaciones...'
+    : 'Pregunta por rutas, ocupación o decisiones IA...'
+);
+
+const mensajeInicial = computed(() => {
+  if (props.scope === 'JEFE') {
+    return 'Hola. Soy tu Copiloto Logístico para Jefes. Puedo ayudarte con turnos, rutas y empleados a tu cargo.';
+  }
+
+  return 'Hola. Soy tu Copiloto Logístico para Administración. Puedo ayudarte con rutas, ocupación y planes IA.';
+});
+
+const historial = ref<Mensaje[]>([{ role: 'bot', text: mensajeInicial.value }]);
+
+watch(mensajeInicial, (nuevoMensaje) => {
+  historial.value = [{ role: 'bot', text: nuevoMensaje }];
+});
+
+watch(
+  () => historial.value.length,
+  async () => {
+    await nextTick();
+    if (historialDiv.value) {
+      historialDiv.value.scrollTop = historialDiv.value.scrollHeight;
+    }
+  }
+);
 
 const enviarMensaje = async () => {
   if (!inputMensaje.value.trim()) return;
@@ -67,15 +105,20 @@ const enviarMensaje = async () => {
     const respuesta = await fetch(`${API_BASE_URL}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify({ mensaje_usuario: textoUsuario })
+      body: JSON.stringify({
+        mensaje_usuario: textoUsuario,
+        fecha: props.contexto?.fecha,
+        turno: props.contexto?.turno,
+        panel: props.scope || null
+      })
     });
 
-    const data = await respuesta.json();
+    const data = await respuesta.json().catch(() => ({}));
 
-    if (data.success) {
+    if (respuesta.ok && data.success) {
       historial.value.push({ role: 'bot', text: data.respuesta });
     } else {
-      historial.value.push({ role: 'bot', text: 'Error: No pude conectarme con la central.' });
+      historial.value.push({ role: 'bot', text: data.message || 'Error: No pude conectarme con la central.' });
     }
   } catch (error) {
     historial.value.push({ role: 'bot', text: 'Error de red. Asegúrate de que el servidor esté corriendo.' });
