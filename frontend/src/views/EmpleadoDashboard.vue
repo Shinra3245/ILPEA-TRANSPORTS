@@ -3,7 +3,7 @@
     <div class="dashboard-container">
       <header class="header">
         <h1>ILPEA | Panel del Empleado</h1>
-        <p>Tu ruta asignada y estado de viaje</p>
+        <p>Consulta y gestiona tu asiento asignado</p>
         <div class="usuario-info">
           <span>Bienvenido, {{ obtenerNombre() }}</span>
           <button @click="handleLogout" class="btn-logout">Cerrar Sesión</button>
@@ -13,173 +13,184 @@
       <main>
         <ProtectedRoute requiere-permiso="rutas:ver">
           <section class="rutas-section">
-            <h2>Mi Ruta Asignada</h2>
-            
-            <div v-if="cargando" class="loading">
-              Cargando tu ruta...
-            </div>
-            
-            <div v-else-if="error" class="error">
-              {{ error }}
-            </div>
-            
-            <div v-else-if="miRuta" class="ruta-card">
+            <h2>Mi Asignación</h2>
+
+            <div v-if="cargando" class="loading">Cargando tu asignación...</div>
+
+            <div v-else-if="error" class="error">{{ error }}</div>
+
+            <div v-else-if="asignacion" class="ruta-card">
               <div class="ruta-header">
-                <h3>Ruta {{ miRuta.ruta }}</h3>
-                <span :class="['estado-badge', estadoRuta]">{{ estadoRuta }}</span>
+                <h3>Detalle del viaje</h3>
               </div>
 
               <div class="ruta-details">
                 <div class="detail">
-                  <span class="label">Tipo de Unidad:</span>
-                  <span class="value">{{ miRuta['tipo de unidad'] }}</span>
+                  <span class="label">Ruta:</span>
+                  <span class="value">{{ asignacion.ruta }}</span>
                 </div>
                 <div class="detail">
-                  <span class="label">Capacidad Real:</span>
-                  <span class="value">{{ miRuta.capacidad_real }} pasajeros</span>
+                  <span class="label">Asiento:</span>
+                  <span class="value">{{ asignacion.asiento }}</span>
                 </div>
                 <div class="detail">
-                  <span class="label">Ocupación Máxima del Día:</span>
-                  <span class="value">{{ miRuta.max_pasajeros_dia }} pasajeros</span>
+                  <span class="label">Día:</span>
+                  <span class="value">{{ asignacion.fecha }}</span>
                 </div>
                 <div class="detail">
-                  <span class="label">Porcentaje de Ocupación:</span>
-                  <div class="progress-bar">
-                    <div 
-                      class="progress-fill"
-                      :class="{ 'critical': obtenerOcupacionSegura(miRuta) < 40 }"
-                      :style="{ width: Math.min(obtenerOcupacionSegura(miRuta), 100) + '%' }"
-                    ></div>
-                  </div>
-                  <span class="percentage">{{ formatearOcupacion(miRuta) }}%</span>
+                  <span class="label">Turno:</span>
+                  <span class="value">{{ asignacion.turno }}</span>
                 </div>
-                <div class="detail">
-                  <span class="label">Alerta:</span>
-                  <span :class="['alert-text', miRuta.alerta_ocupacion === 'OK' ? 'ok' : 'critical']">
-                    {{ miRuta.alerta_ocupacion }}
-                  </span>
-                </div>
+              </div>
+
+              <div class="acciones-card">
+                <button
+                  class="btn-cancelar"
+                  :disabled="cancelando"
+                  @click="cancelarAsiento"
+                >
+                  {{ cancelando ? 'Cancelando...' : 'Cancelar asiento' }}
+                </button>
+                <p v-if="mensaje" class="status-ok">{{ mensaje }}</p>
               </div>
             </div>
 
             <div v-else class="no-data">
-              <p>No tienes una ruta asignada en este momento.</p>
-              <p>Contacta con tu Jefe de Turno para obtener una asignación.</p>
+              <p>No tienes una asignación activa.</p>
+              <p>Contacta a tu Jefe de Turno para una nueva asignación.</p>
             </div>
           </section>
         </ProtectedRoute>
-
-        <section class="info-section">
-          <h2>ℹ️ Información Útil</h2>
-          <div class="info-cards">
-            <div class="card">
-              <h4>¿Qué significa la ocupación?</h4>
-              <p>
-                Muestra qué porcentaje de la capacidad total de tu ruta está siendo utilizado.
-                Si es mayor al 40%, la ruta es eficiente.
-              </p>
-            </div>
-            <div class="card">
-              <h4>Estado de tu Ruta</h4>
-              <p>
-                <strong>OK:</strong> Tu ruta está operando normalmente.<br>
-                <strong>CRÍTICA:</strong> Tu ruta podría ser cancelada o modificada.
-              </p>
-            </div>
-            <div class="card">
-              <h4>¿Necesitas Ayuda?</h4>
-              <p>Contacta directamente con tu Jefe de Turno para cualquier consulta sobre tu ruta asignada.</p>
-            </div>
-          </div>
-        </section>
       </main>
     </div>
   </ProtectedRoute>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuth } from '../composables/useAuth';
 import ProtectedRoute from '../components/ProtectedRoute.vue';
 
-interface Ruta {
-  id: string;
-  ruta: number;
-  "tipo de unidad": string;
-  capacidad_real: number;
-  max_pasajeros_dia: number;
-  porcentaje_ocupacion_max: number;
-  alerta_ocupacion: string;
-  sugerencia_right_sizing: string;
+interface Asignacion {
+  idRuta: string;
+  ruta: string;
+  asiento: number;
+  fecha: string;
+  turno: string;
 }
 
-type RutaApi = Partial<Ruta> & Record<string, unknown>;
+type MiRutaApi = {
+  id_ruta?: unknown;
+  ruta?: unknown;
+  asiento_asignado?: unknown;
+  nombre?: unknown;
+  zona?: unknown;
+  nombre_ruta?: unknown;
+} & Record<string, unknown>;
 
 const router = useRouter();
 const { logout, obtenerNombre, authHeaders } = useAuth();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
-const rutas = ref<Ruta[]>([]);
-const miRuta = ref<Ruta | null>(null);
+const asignacion = ref<Asignacion | null>(null);
 const cargando = ref(true);
 const error = ref<string | null>(null);
+const mensaje = ref<string | null>(null);
+const cancelando = ref(false);
 
 const numeroSeguro = (valor: unknown, fallback = 0): number => {
   const numero = Number(valor);
   return Number.isFinite(numero) ? numero : fallback;
 };
 
-const normalizarRuta = (ruta: RutaApi): Ruta => ({
-  id: String(ruta.id ?? ''),
-  ruta: numeroSeguro(ruta.ruta, 0),
-  'tipo de unidad': String(ruta['tipo de unidad'] ?? 'N/D'),
-  capacidad_real: numeroSeguro(ruta.capacidad_real, 0),
-  max_pasajeros_dia: numeroSeguro(ruta.max_pasajeros_dia, 0),
-  porcentaje_ocupacion_max: numeroSeguro(ruta.porcentaje_ocupacion_max, 0),
-  alerta_ocupacion: String(ruta.alerta_ocupacion ?? 'N/D'),
-  sugerencia_right_sizing: String(ruta.sugerencia_right_sizing ?? 'Sin sugerencia')
-});
-
-const obtenerOcupacionSegura = (ruta: Ruta | null): number => {
-  if (!ruta) {
-    return 0;
-  }
-
-  return numeroSeguro(ruta.porcentaje_ocupacion_max, 0);
+const textoSeguro = (valor: unknown, fallback = 'N/D'): string => {
+  const texto = String(valor ?? '').trim();
+  return texto || fallback;
 };
-
-const formatearOcupacion = (ruta: Ruta | null): string => obtenerOcupacionSegura(ruta).toFixed(1);
-
-const estadoRuta = computed(() => {
-  if (!miRuta.value) return 'SIN ASIGNAR';
-  return miRuta.value.alerta_ocupacion === 'OK' ? 'ACTIVA' : 'CRÍTICA';
-});
 
 const obtenerRutas = async () => {
   try {
     cargando.value = true;
-    const headers = await authHeaders();
-    const respuesta = await fetch(`${API_BASE_URL}/api/rutas`, { headers });
+    error.value = null;
+    mensaje.value = null;
 
-    if (!respuesta.ok) throw new Error('Error obteniendo rutas');
+    const headers = await authHeaders();
+    const fechaHoy = new Date().toISOString().slice(0, 10);
+    const params = new URLSearchParams({ fecha: fechaHoy });
+
+    const respuesta = await fetch(`${API_BASE_URL}/api/empleado/mi-ruta?${params.toString()}`, { headers });
+
+    if (!respuesta.ok) throw new Error('Error obteniendo tu ruta asignada');
 
     const datos = await respuesta.json();
-    const data = Array.isArray(datos?.data) ? datos.data : [];
-    rutas.value = data.map((ruta: RutaApi) => normalizarRuta(ruta));
+    const data: MiRutaApi | null = datos?.data || null;
+    const asiento = numeroSeguro(data?.asiento_asignado, 0);
 
-    // Simular que el empleado tiene asignada la primera ruta (o aleatoria)
-    if (rutas.value.length > 0) {
-      const primeraRuta = rutas.value[0];
-      if (primeraRuta) {
-        miRuta.value = primeraRuta;
-      }
+    if (!data || !data.id_ruta || asiento <= 0) {
+      asignacion.value = null;
+      return;
     }
+
+    asignacion.value = {
+      idRuta: textoSeguro(data.id_ruta, ''),
+      ruta: textoSeguro(
+        data.nombre_ruta,
+        textoSeguro(
+          data.zona,
+          textoSeguro(data.nombre, `Ruta ${numeroSeguro(data.ruta, 0)}`)
+        )
+      ),
+      asiento,
+      fecha: textoSeguro(datos?.fecha, fechaHoy),
+      turno: textoSeguro(datos?.turno, 'Sin turno')
+    };
   } catch (err: any) {
     error.value = err.message || 'Error cargando rutas';
+    asignacion.value = null;
     console.error('Error:', err);
   } finally {
     cargando.value = false;
+  }
+};
+
+const cancelarAsiento = async () => {
+  if (!asignacion.value) {
+    return;
+  }
+
+  try {
+    cancelando.value = true;
+    error.value = null;
+    mensaje.value = null;
+
+    const headers = await authHeaders();
+
+    const respuesta = await fetch(`${API_BASE_URL}/api/asignar/cancelar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers
+      },
+      body: JSON.stringify({
+        id_ruta: asignacion.value.idRuta,
+        fecha: asignacion.value.fecha,
+        turno: asignacion.value.turno,
+        asiento: asignacion.value.asiento
+      })
+    });
+
+    const payload = await respuesta.json().catch(() => ({}));
+    if (!respuesta.ok || payload?.success === false) {
+      throw new Error(payload?.message || 'No se pudo cancelar tu asiento.');
+    }
+
+    mensaje.value = 'Asiento cancelado correctamente.';
+    asignacion.value = null;
+  } catch (err: any) {
+    error.value = err.message || 'No se pudo cancelar el asiento.';
+  } finally {
+    cancelando.value = false;
   }
 };
 
@@ -377,6 +388,32 @@ main {
   background-color: #f9fafb;
   border-radius: 4px;
   color: #4b5563;
+}
+
+.acciones-card {
+  padding: 0 1.5rem 1.5rem;
+}
+
+.btn-cancelar {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  background-color: #dc2626;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-cancelar:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.status-ok {
+  margin: 0.75rem 0 0;
+  color: #166534;
+  font-weight: 600;
 }
 
 .info-cards {

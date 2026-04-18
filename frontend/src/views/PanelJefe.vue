@@ -1,9 +1,21 @@
 <template>
   <div class="jefe-container">
     <header class="header">
-      <div class="brand">ILPEA <span>LOGÍSTICA</span></div>
+      <div class="header-left">
+        <button
+          v-if="mostrarBotonVolverDashboard"
+          type="button"
+          class="btn-back"
+          @click="volverADashboard"
+          aria-label="Volver al dashboard"
+          title="Volver al dashboard"
+        >
+          ←
+        </button>
+        <div class="brand">ILPEA <span>LOGÍSTICA</span></div>
+      </div>
       <div class="user-info">
-        <span>Panel de Asignación: Jefe de Turno</span>
+        <span>{{ tituloPanel }}</span>
         <button @click="salir" class="btn-logout">Salir</button>
       </div>
     </header>
@@ -49,21 +61,24 @@
       <section class="form-section">
         <div class="section-card">
           <h3>Asignación de Empleado</h3>
-          <p class="subtitle">Selecciona un asiento y asigna solo empleados bajo tu responsabilidad</p>
+          <p class="subtitle">{{ subtituloPanel }}</p>
 
-          <p v-if="cargandoContexto" class="status-info">Cargando empleados y rutas del turno...</p>
+          <p v-if="cargandoContexto" class="status-info">Cargando empleados y rutas...</p>
           
           <div class="form-group">
             <label>Empleado asignado</label>
             <select v-model="registro.idEmpleado" class="minimal-select" :disabled="!empleadosAsignados.length || cargandoContexto">
               <option value="" disabled>
-                {{ empleadosAsignados.length ? 'Selecciona un empleado' : 'Sin empleados asignados' }}
+                {{ empleadosAsignados.length ? 'Selecciona un empleado' : 'Sin empleados disponibles' }}
               </option>
               <option v-for="empleado in empleadosAsignados" :key="empleado.uid" :value="empleado.id_empleado">
                 {{ empleado.id_empleado }} - {{ empleado.nombre }}
               </option>
             </select>
             <p v-if="empleadoSeleccionado" class="helper-note">{{ empleadoSeleccionado.email }}</p>
+            <p v-if="empleadoYaAsignado" class="status-error" style="margin-top: 0.5rem; font-size: 0.85rem;">
+              ⚠️ Este empleado ya está asignado a la Ruta {{ empleadoYaAsignado.ruta.ruta }} (Asiento {{ empleadoYaAsignado.asiento }}). Debes desasignarlo en la tabla inferior primero.
+            </p>
           </div>
 
           <div class="form-group">
@@ -212,13 +227,13 @@
       </div>
     </section>
 
-    <CopilotoChat scope="JEFE" :contexto="{ fecha: registro.dia, turno: registro.horario }" />
+    <CopilotoChat :scope="scopeChat" :contexto="{ fecha: registro.dia, turno: registro.horario }" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue'
 import CopilotoChat from '../components/CopilotoChat.vue'
@@ -274,9 +289,23 @@ const TURNOS_LABEL: Record<string, string> = {
   dom_3: 'Domingo 3er',
 }
 
+const route = useRoute()
 const router = useRouter()
-const { logout, authHeaders } = useAuth()
+const { logout, authHeaders, obtenerRol } = useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000'
+const esAdmin = computed(() => obtenerRol() === 'ADMIN')
+const mostrarBotonVolverDashboard = computed(() => esAdmin.value && route.path === '/admin/asignaciones')
+const tituloPanel = computed(() => (esAdmin.value ? 'Panel de Asignación: Administrador' : 'Panel de Asignación: Jefe de Turno'))
+const subtituloPanel = computed(() => (
+  esAdmin.value
+    ? 'Selecciona un asiento y asigna empleados con acceso total a todas las rutas.'
+    : 'Selecciona un asiento y asigna solo empleados bajo tu responsabilidad'
+))
+const scopeChat = computed(() => (esAdmin.value ? 'ADMIN' : 'JEFE'))
+
+const volverADashboard = () => {
+  router.push('/admin')
+}
 
 const registro = ref({
   idEmpleado: '',
@@ -306,10 +335,17 @@ const empleadoSeleccionado = computed(() => {
   return empleadosAsignados.value.find((empleado) => empleado.id_empleado === registro.value.idEmpleado) || null
 })
 
+const empleadoYaAsignado = computed(() => {
+  if (!registro.value.idEmpleado) return null
+  return detectarAsignacionEmpleado(registro.value.idEmpleado)
+})
+
 const rutasProgramadas = computed(() => rutas.value.filter((ruta) => ruta.programada))
 
 const rutasParaTurno = computed(() => {
-  return rutasProgramadas.value.length ? rutasProgramadas.value : rutas.value
+  // Mostrar siempre todas las rutas (programadas y base) para que el Jefe
+  // pueda seguir asignando empleados a nuevas rutas libremente.
+  return rutas.value
 })
 
 const rutaRecomendada = computed(() => {
@@ -334,7 +370,7 @@ const resumenRutasTurno = computed(() => {
     return `No hay rutas programadas para ${TURNOS_LABEL[registro.value.horario] || registro.value.horario}. Se muestran rutas base para que sigas operando.`
   }
 
-  return `${rutasProgramadas.value.length} rutas programadas para ${TURNOS_LABEL[registro.value.horario] || registro.value.horario}.`
+  return `${rutasProgramadas.value.length} rutas programadas para ${TURNOS_LABEL[registro.value.horario] || registro.value.horario}. (Todas las rutas disponibles)`
 })
 
 const rutaSeleccionada = computed(() => {
@@ -359,6 +395,7 @@ const isFormReady = computed(() => {
     && registro.value.asiento !== null
     && registro.value.ruta !== ''
     && !cargandoContexto.value
+    && !empleadoYaAsignado.value
   )
 })
 
@@ -459,7 +496,9 @@ async function cargarEmpleadosAsignados() {
   empleadosAsignados.value = empleadosNormalizados.filter((empleado: EmpleadoAsignado) => empleado.activo !== false)
 
   if (!empleadosAsignados.value.length) {
-    aviso.value = 'No tienes empleados asignados activos. Pide al administrador que asigne al menos uno.'
+    aviso.value = esAdmin.value
+      ? 'No hay empleados activos registrados para asignar.'
+      : 'No tienes empleados asignados activos. Pide al administrador que asigne al menos uno.'
     registro.value.idEmpleado = ''
     return
   }
@@ -771,7 +810,7 @@ async function cargarContextoInicial() {
   try {
     await Promise.all([cargarEmpleadosAsignados(), cargarRutasDeDB()])
   } catch (err: any) {
-    error.value = err.message || 'No se pudo cargar el contexto del panel de jefe.'
+    error.value = err.message || `No se pudo cargar el contexto del panel de ${esAdmin.value ? 'administración' : 'jefe'}.`
   } finally {
     cargandoContexto.value = false
   }
@@ -802,8 +841,25 @@ onMounted(cargarContextoInicial)
 /* ESTILOS RESTAURADOS - ILPEA CLEAN TECH */
 .jefe-container { min-height: 100vh; background: #f8fafc; font-family: 'Inter', sans-serif; color: #1e293b; }
 .header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 3rem; background: #fff; border-bottom: 1px solid #e2e8f0; }
+.header-left { display: flex; align-items: center; gap: 0.75rem; }
 .brand { font-weight: 800; font-size: 1.2rem; }
 .brand span { color: #2563eb; }
+.btn-back {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: 0.2s;
+}
+.btn-back:hover { background: #f1f5f9; border-color: #94a3b8; }
 .btn-logout { background: none; border: 1px solid #ef4444; color: #ef4444; padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: 0.2s; }
 .btn-logout:hover { background: #fef2f2; }
 

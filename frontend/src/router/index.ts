@@ -35,6 +35,13 @@ const router = createRouter({
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
+    {
+      path: '/admin/asignaciones',
+      name: 'AdminAsignaciones',
+      component: PanelJefe,
+      meta: { requiresAuth: true, role: 'ADMIN' }
+    },
+
     { 
       path: '/jefe', 
       name: 'Jefe', 

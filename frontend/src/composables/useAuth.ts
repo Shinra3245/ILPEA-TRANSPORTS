@@ -230,7 +230,7 @@ export function useAuth() {
         'dashboard:jefe',
         'dashboard:empleado',
       ],
-      EMPLEADO: ['rutas:ver', 'asignacion:ver', 'dashboard:empleado'],
+      EMPLEADO: ['rutas:ver', 'asignacion:ver', 'asignacion:cancelar', 'dashboard:empleado'],
     };
 
     const permisos = permisosPorRol[usuario.value.rol] || [];
