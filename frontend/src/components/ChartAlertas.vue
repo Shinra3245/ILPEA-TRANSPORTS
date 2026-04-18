@@ -14,8 +14,9 @@ import {
   Tooltip,
   Legend
 } from 'chart.js';
+import ChartDataLabels from 'chartjs-plugin-datalabels';
 
-ChartJS.register(ArcElement, Tooltip, Legend);
+ChartJS.register(ArcElement, Tooltip, Legend, ChartDataLabels);
 
 interface Ruta {
   id: string;
@@ -89,6 +90,15 @@ const chartOptions = {
           const percentage = ((context.parsed / total) * 100).toFixed(1);
           return `${context.label}: ${context.parsed} rutas (${percentage}%)`;
         }
+      }
+    },
+    datalabels: {
+      color: '#ffffff',
+      font: { weight: 'bold' as const, size: 12 },
+      formatter: (value: number, context: any) => {
+        const total = context.dataset.data.reduce((a: number, b: number) => a + b, 0);
+        const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
+        return `${value} (${percentage}%)`;
       }
     }
   }

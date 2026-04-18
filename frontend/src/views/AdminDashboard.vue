@@ -1,8 +1,15 @@
 <template>
   <div class="dashboard-container">
     <header class="header">
-      <h1>ILPEA | Admin Dashboard</h1>
-      <p>Control de Optimización Logística y Right-Sizing</p>
+      <div class="header-content">
+        <div>
+          <h1>ILPEA | Admin Dashboard</h1>
+          <p>Control de Optimización Logística y Right-Sizing</p>
+        </div>
+        <button @click="exportarTodosPDF" :disabled="cargando || !!error" class="btn-exportar">
+          📄 Exportar Reporte Completo
+        </button>
+      </div>
     </header>
 
     <main>
@@ -19,13 +26,13 @@
         <!-- Sección de Gráficos -->
         <div class="charts-section">
           <div class="charts-grid">
-            <div class="chart-item">
+            <div class="chart-item" id="chart-ocupacion">
               <ChartOcupacion :rutas="rutas" />
             </div>
-            <div class="chart-item">
+            <div class="chart-item" id="chart-capacidad">
               <ChartCapacidad :rutas="rutas" />
             </div>
-            <div class="chart-item chart-item-small">
+            <div class="chart-item chart-item-small" id="chart-alertas">
               <ChartAlertas :rutas="rutas" />
             </div>
           </div>
@@ -100,6 +107,7 @@ import RecomendacionesIA from '../components/RecomendacionesIA.vue';
 import ChartOcupacion from '../components/ChartOcupacion.vue';
 import ChartCapacidad from '../components/ChartCapacidad.vue';
 import ChartAlertas from '../components/ChartAlertas.vue';
+import { exportMultipleToPDF } from '../utils/exportPdf';
 import { ref, onMounted } from 'vue';
 
 // 1. Definición del Modelo de Datos (TypeScript)
@@ -141,7 +149,23 @@ const obtenerRutas = async () => {
   }
 };
 
-// 4. Ejecutar al montar el componente
+// 4.1 Función para exportar todos los gráficos a PDF
+const exportarTodosPDF = async () => {
+  const fechaHoy = new Date().toLocaleDateString('es-ES').replace(/\//g, '-');
+  const nombreArchivo = `Reporte_ILPEA_${fechaHoy}`;
+  
+  try {
+    await exportMultipleToPDF(
+      ['chart-ocupacion', 'chart-capacidad', 'chart-alertas'],
+      nombreArchivo
+    );
+  } catch (error) {
+    console.error('Error al exportar reporte:', error);
+    alert('Error al generar el reporte. Intenta de nuevo.');
+  }
+};
+
+// 4.2 Ejecutar al montar el componente
 onMounted(() => {
   obtenerRutas();
 });
@@ -163,6 +187,13 @@ onMounted(() => {
   padding-bottom: 1rem;
 }
 
+.header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
 .header h1 {
   margin: 0;
   color: #1e293b;
@@ -171,6 +202,37 @@ onMounted(() => {
 .header p {
   color: #64748b;
   margin-top: 0.5rem;
+}
+
+.btn-exportar {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+  white-space: nowrap;
+}
+
+.btn-exportar:hover {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  box-shadow: 0 6px 12px rgba(37, 99, 235, 0.3);
+  transform: translateY(-2px);
+}
+
+.btn-exportar:active {
+  transform: translateY(0);
+}
+
+.btn-exportar:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
+  background: #94a3b8;
 }
 
 /* Tabla Estilos */

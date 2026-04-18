@@ -17,6 +17,7 @@ import {
   Tooltip,
   Legend
 } from 'chart.js';
+import ChartDataLabels from 'chartjs-plugin-datalabels';
 
 ChartJS.register(
   CategoryScale,
@@ -24,7 +25,8 @@ ChartJS.register(
   BarElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  ChartDataLabels
 );
 
 interface Ruta {
@@ -73,6 +75,13 @@ const chartOptions = {
     },
     title: {
       display: false
+    },
+    datalabels: {
+      anchor: 'end' as const,
+      align: 'top' as const,
+      color: '#1e293b',
+      font: { weight: 'bold' as const, size: 12 },
+      formatter: (value: number) => `${value}`
     }
   },
   scales: {
