@@ -47,11 +47,11 @@
                   <div class="progress-bar">
                     <div 
                       class="progress-fill"
-                      :class="{ 'critical': miRuta.porcentaje_ocupacion_max < 40 }"
-                      :style="{ width: Math.min(miRuta.porcentaje_ocupacion_max, 100) + '%' }"
+                      :class="{ 'critical': obtenerOcupacionSegura(miRuta) < 40 }"
+                      :style="{ width: Math.min(obtenerOcupacionSegura(miRuta), 100) + '%' }"
                     ></div>
                   </div>
-                  <span class="percentage">{{ miRuta.porcentaje_ocupacion_max.toFixed(1) }}%</span>
+                  <span class="percentage">{{ formatearOcupacion(miRuta) }}%</span>
                 </div>
                 <div class="detail">
                   <span class="label">Alerta:</span>
@@ -114,6 +114,8 @@ interface Ruta {
   sugerencia_right_sizing: string;
 }
 
+type RutaApi = Partial<Ruta> & Record<string, unknown>;
+
 const router = useRouter();
 const { logout, obtenerNombre, authHeaders } = useAuth();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
@@ -122,6 +124,32 @@ const rutas = ref<Ruta[]>([]);
 const miRuta = ref<Ruta | null>(null);
 const cargando = ref(true);
 const error = ref<string | null>(null);
+
+const numeroSeguro = (valor: unknown, fallback = 0): number => {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : fallback;
+};
+
+const normalizarRuta = (ruta: RutaApi): Ruta => ({
+  id: String(ruta.id ?? ''),
+  ruta: numeroSeguro(ruta.ruta, 0),
+  'tipo de unidad': String(ruta['tipo de unidad'] ?? 'N/D'),
+  capacidad_real: numeroSeguro(ruta.capacidad_real, 0),
+  max_pasajeros_dia: numeroSeguro(ruta.max_pasajeros_dia, 0),
+  porcentaje_ocupacion_max: numeroSeguro(ruta.porcentaje_ocupacion_max, 0),
+  alerta_ocupacion: String(ruta.alerta_ocupacion ?? 'N/D'),
+  sugerencia_right_sizing: String(ruta.sugerencia_right_sizing ?? 'Sin sugerencia')
+});
+
+const obtenerOcupacionSegura = (ruta: Ruta | null): number => {
+  if (!ruta) {
+    return 0;
+  }
+
+  return numeroSeguro(ruta.porcentaje_ocupacion_max, 0);
+};
+
+const formatearOcupacion = (ruta: Ruta | null): string => obtenerOcupacionSegura(ruta).toFixed(1);
 
 const estadoRuta = computed(() => {
   if (!miRuta.value) return 'SIN ASIGNAR';
@@ -137,7 +165,8 @@ const obtenerRutas = async () => {
     if (!respuesta.ok) throw new Error('Error obteniendo rutas');
 
     const datos = await respuesta.json();
-    rutas.value = datos.data || [];
+    const data = Array.isArray(datos?.data) ? datos.data : [];
+    rutas.value = data.map((ruta: RutaApi) => normalizarRuta(ruta));
 
     // Simular que el empleado tiene asignada la primera ruta (o aleatoria)
     if (rutas.value.length > 0) {
