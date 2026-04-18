@@ -32,7 +32,7 @@ const router = createRouter({
 })
 
 // GUARDIÁN DE NAVEGACIÓN (Protección de Rutas)
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const { restaurarSesion, obtenerRol } = useAuth()
   const autenticado = await restaurarSesion()
   const userRole = obtenerRol()
