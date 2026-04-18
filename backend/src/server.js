@@ -6,11 +6,22 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 // Importar configuración de RBAC
-const { ROLES, tienePermiso, obtenerPermisosDelRol } = require('./config/roles');
+const { ROLES, obtenerPermisosDelRol } = require('./config/roles');
 const { autenticar, autorizar, autenticarSimulado, registrarAccion } = require('./middleware/auth');
 
-// 1. Inicializar Firebase Admin usando nuestra llave local
-const serviceAccount = require('../config/firebase-key.json');
+function cargarCredencialesFirebase() {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  }
+
+  const keyPath = process.env.FIREBASE_KEY_PATH
+    ? path.resolve(__dirname, process.env.FIREBASE_KEY_PATH)
+    : path.resolve(__dirname, '../config/firebase-key.json');
+
+  return require(keyPath);
+}
+
+const serviceAccount = cargarCredencialesFirebase();
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -69,7 +80,7 @@ app.use(express.json()); // Permite recibir datos en formato JSON
 // Por defecto usa Firebase Auth real. Para pruebas locales: AUTH_MODE=simulated
 app.use((req, res, next) => {
   // Saltar autenticación para /api/auth/login (permitir acceso público)
-  if (req.path === '/api/auth/login' || req.path === '/api/auth/crear-usuario') {
+  if (req.path === '/api/auth/login') {
     return next();
   }
 
@@ -114,6 +125,13 @@ app.get('/api/rutas', autorizar('rutas:ver'), async (req, res) => {
 // ==========================================
 app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
   const { id_empleado, id_ruta, fecha } = req.body;
+
+  if (!id_empleado || !id_ruta || !fecha) {
+    return res.status(400).json({
+      success: false,
+      message: 'id_empleado, id_ruta y fecha son requeridos.'
+    });
+  }
   
   // Referencia al documento de programación diaria específico
   const docRef = db.collection('programacion_diaria').doc(`${fecha}_${id_ruta}`);
@@ -136,6 +154,10 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
         throw new Error("CAP_CHECK_FAILED: La unidad ya está a su máxima capacidad.");
       }
 
+      if ((data.pasajeros_ids || []).includes(id_empleado)) {
+        throw new Error('DUPLICATE_ASSIGNMENT: El empleado ya está asignado a esta ruta.');
+      }
+
       // Si hay espacio, registramos al empleado y sumamos 1 asiento
       const nuevosPasajeros = [...(data.pasajeros_ids || []), id_empleado];
       
@@ -148,7 +170,12 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
     res.status(200).json({ success: true, message: "Empleado asignado exitosamente." });
 
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    const status = String(error.message || '').startsWith('CAP_CHECK_FAILED')
+      || String(error.message || '').startsWith('DUPLICATE_ASSIGNMENT')
+      ? 409
+      : 400;
+
+    res.status(status).json({ success: false, message: error.message });
   }
 });
 
@@ -158,6 +185,13 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
 // ==========================================
 app.post('/api/rutas/sync', autorizar('rutas:sync'), async (req, res) => {
   const rutasData = req.body; // Esperamos recibir un arreglo de rutas desde Python
+
+  if (!Array.isArray(rutasData)) {
+    return res.status(400).json({
+      success: false,
+      message: 'El payload debe ser un arreglo de rutas.'
+    });
+  }
   
   try {
     const batch = db.batch(); // Usamos batch para escribir todo de una sola vez
@@ -487,6 +521,14 @@ app.delete('/api/usuarios/:uid', autorizar('usuarios:eliminar'), async (req, res
 // ENDPOINT 11: Login simulado (Para desarrollo)
 // ==========================================
 app.post('/api/auth/login', (req, res) => {
+  const modoAuth = (process.env.AUTH_MODE || 'firebase').toLowerCase();
+  if (modoAuth !== 'simulated') {
+    return res.status(403).json({
+      success: false,
+      message: 'Login simulado deshabilitado. Usa Firebase Auth en modo real.'
+    });
+  }
+
   const { email, rol = ROLES.EMPLEADO } = req.body;
 
   if (!email) {

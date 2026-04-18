@@ -89,11 +89,14 @@
 
           <button 
             @click="confirmarAsignacion" 
-            :disabled="!isFormReady"
+            :disabled="!isFormReady || cargando"
             class="btn-confirm"
           >
-            Confirmar Registro
+            {{ cargando ? 'Procesando...' : 'Confirmar Registro' }}
           </button>
+
+          <p v-if="mensaje" class="status-ok">{{ mensaje }}</p>
+          <p v-if="error" class="status-error">{{ error }}</p>
           
           <button class="btn-report">Generar Reporte de Turno</button>
         </div>
@@ -105,87 +108,126 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-// Importamos el nuevo componente del chatbot
-import CopilotoChat from '../components/CopilotoChat.vue'
 import { useAuth } from '../composables/useAuth'
 
-const router = useRouter()
-const { logout } = useAuth()
+interface Ruta {
+  id?: string;
+  ruta: number;
+  zona?: string;
+  nombre?: string;
+  capacidad_real: number;
+  pasajeros_ids?: string[];
+}
 
-// 1. Estado Reactivo
+const router = useRouter()
+const { logout, authHeaders } = useAuth()
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000'
+
 const registro = ref({
   idEmpleado: '',
   ruta: '',
-  dia: new Date().toISOString().substr(0, 10),
+  dia: new Date().toISOString().slice(0, 10),
   horario: 'mixto_1',
   asiento: null as number | null
 })
 
-const rutas = ref<any[]>([])
+const rutas = ref<Ruta[]>([])
 const cargando = ref(true)
 const error = ref<string | null>(null)
+const mensaje = ref<string | null>(null)
 
-// 2. Carga de Datos
 const obtenerRutasDeDB = async () => {
+  cargando.value = true
+  error.value = null
+
   try {
-    cargando.value = true
-    const respuesta = await fetch('http://localhost:3000/api/rutas')
-    if (!respuesta.ok) throw new Error('Falla en API')
+    const headers = await authHeaders()
+    const respuesta = await fetch(`${API_BASE_URL}/api/rutas`, { headers })
+    if (!respuesta.ok) throw new Error(`Falla en API (${respuesta.status})`)
+
     const json = await respuesta.json()
-    rutas.value = json.data || json
+    rutas.value = Array.isArray(json?.data) ? json.data : []
+
     if (rutas.value.length > 0) {
-      registro.value.ruta = (rutas.value[0].id || rutas.value[0].ruta).toString()
+      const primeraRuta = rutas.value[0]
+      if (primeraRuta) {
+        registro.value.ruta = (primeraRuta.id || primeraRuta.ruta).toString()
+      }
     }
-  } catch (err) {
-    error.value = "Error de conexión"
+  } catch (err: any) {
+    error.value = err.message || 'Error de conexión'
   } finally {
     cargando.value = false
   }
 }
 
-// 3. Lógica Computada
 const rutaSeleccionada = computed(() => {
   return rutas.value.find(r => (r.id || r.ruta).toString() === registro.value.ruta)
 })
 
 const asientosLibres = computed(() => {
   if (!rutaSeleccionada.value) return 0
-  const ocupados = rutaSeleccionada.value.asientos_ocupados?.length || 0
+  const ocupados = rutaSeleccionada.value.pasajeros_ids?.length || 0
   return rutaSeleccionada.value.capacidad_real - ocupados
 })
 
 const isFormReady = computed(() => {
-  return registro.value.idEmpleado !== '' && registro.value.asiento !== null
+  return registro.value.idEmpleado !== '' && registro.value.asiento !== null && registro.value.ruta !== ''
 })
 
-// 4. Métodos de Interacción
 const seleccionarAsiento = (n: number) => {
-  if (!rutaSeleccionada.value?.asientos_ocupados?.includes(n)) {
+  if (!rutaSeleccionada.value?.pasajeros_ids?.includes(String(n))) {
     registro.value.asiento = n
   }
 }
 
 const getSeatClass = (n: number) => {
-  if (rutaSeleccionada.value?.asientos_ocupados?.includes(n)) return 'occupied'
+  if (rutaSeleccionada.value?.pasajeros_ids?.includes(String(n))) return 'occupied'
   if (registro.value.asiento === n) return 'selected'
   return 'free'
 }
 
-const confirmarAsignacion = () => {
-  if (rutaSeleccionada.value && registro.value.asiento) {
-    if (!rutaSeleccionada.value.asientos_ocupados) rutaSeleccionada.value.asientos_ocupados = []
-    rutaSeleccionada.value.asientos_ocupados.push(registro.value.asiento)
-    alert(`Éxito: Empleado ${registro.value.idEmpleado} registrado.`)
+const confirmarAsignacion = async () => {
+  if (!isFormReady.value) return
+
+  try {
+    const headers = await authHeaders()
+    const respuesta = await fetch(`${API_BASE_URL}/api/asignar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify({
+        id_empleado: registro.value.idEmpleado,
+        id_ruta: registro.value.ruta,
+        fecha: registro.value.dia,
+      }),
+    })
+
+    const payload = await respuesta.json().catch(() => ({}))
+    if (!respuesta.ok) {
+      throw new Error(payload?.message || 'No se pudo registrar la asignación.')
+    }
+
+    const ruta = rutaSeleccionada.value
+    if (ruta) {
+      if (!ruta.pasajeros_ids) ruta.pasajeros_ids = []
+      ruta.pasajeros_ids.push(registro.value.idEmpleado)
+    }
+
+    mensaje.value = `Empleado ${registro.value.idEmpleado} asignado correctamente.`
+    error.value = null
     registro.value.asiento = null
     registro.value.idEmpleado = ''
+  } catch (err: any) {
+    error.value = err.message || 'No se pudo registrar la asignación.'
+    mensaje.value = null
   }
 }
 
-const cerrarSesion = async () => {
-  await logout()
 const salir = () => {
-  localStorage.removeItem('userRole')
-  router.push('/login')
+  logout().finally(() => router.push('/login'))
 }
 
 onMounted(obtenerRutasDeDB)
@@ -238,4 +280,6 @@ label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; mar
 .btn-confirm:disabled { background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }
 .btn-report { width: 100%; background: none; border: 1px solid #e2e8f0; color: #64748b; padding: 0.9rem; border-radius: 10px; margin-top: 0.8rem; cursor: pointer; font-weight: 500; }
 .stats-footer { margin-top: 1.5rem; text-align: center; font-size: 0.85rem; color: #94a3b8; }
+.status-ok { margin-top: 1rem; color: #166534; font-weight: 600; }
+.status-error { margin-top: 1rem; color: #b91c1c; font-weight: 600; }
 </style>

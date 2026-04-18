@@ -1,4 +1,12 @@
 {
+  "name": "ilpea-transports",
+  "private": true,
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "check:frontend": "npm --prefix frontend run type-check"
+  },
   "dependencies": {
     "firebase-admin": "^13.8.0",
     "vue-router": "^4.6.4"
