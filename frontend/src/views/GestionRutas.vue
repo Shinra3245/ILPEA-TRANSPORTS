@@ -3,8 +3,17 @@
     <aside class="sidebar">
       <div class="brand">ILPEA <span>ADMIN</span></div>
       <nav class="nav-menu">
-        <button @click="irADashboard" class="nav-item">Dashboard</button>
-        <button class="nav-item active">Gestionar Rutas</button>
+        <button 
+          @click="irADashboard" 
+          :class="['nav-item', { active: $route.path === '/admin' }]">
+          Dashboard
+        </button>
+        
+        <button 
+          :class="['nav-item', { active: $route.path === '/admin/rutas' }]">
+          Gestionar Rutas
+        </button>
+        
         <button class="nav-item">Usuarios</button>
       </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
@@ -57,10 +66,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { useAuth } from '../composables/useAuth';
 
 const router = useRouter();
+const route = useRoute();
 
 // Interfaz TypeScript para el tipado estricto
 interface RutaSamsara {
@@ -87,7 +97,8 @@ const rutasSamsara = ref<RutaSamsara[]>([
 
 // Navegación y Sesión
 const irADashboard = () => {
-  router.push('/dashboard');
+  // SOLUCIÓN: Cambiado a '/admin' para que coincida con el router/index.ts
+  router.push('/admin');
 };
 
 const cerrarSesion = async () => {
