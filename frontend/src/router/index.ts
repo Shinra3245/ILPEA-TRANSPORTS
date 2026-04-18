@@ -4,6 +4,7 @@ import AdminDashboard from '../views/AdminDashboard.vue'
 import AdminUsers from '../views/AdminUsers.vue'
 import PanelJefe from '../views/PanelJefe.vue'
 import EmpleadoDashboard from '../views/EmpleadoDashboard.vue'
+import GestionRutas from '../views/GestionRutas.vue';
 import { useAuth } from '../composables/useAuth'
 
 const router = createRouter({
@@ -17,16 +18,15 @@ const router = createRouter({
       component: AdminDashboard,
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
+
+    // --- NUEVA RUTA PARA GESTIÓN GPS ---
     {
       path: '/admin/rutas',
-      redirect: '/admin'
-    },
-    { 
-      path: '/admin/usuarios', 
-      name: 'AdminUsers', 
-      component: AdminUsers,
+      name: 'GestionRutas',
+      component: GestionRutas,
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
+
     { 
       path: '/jefe', 
       name: 'Jefe', 
