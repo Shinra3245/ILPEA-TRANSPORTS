@@ -3,19 +3,24 @@
     <aside class="sidebar">
       <div class="brand">ILPEA <span>ADMIN</span></div>
       <nav class="nav-menu">
-
-        <button 
-          @click="irADashboard" 
-          :class="['nav-item', { active: $route.path === '/admin' }]">
-          Dashboard
-        </button>
-        <button 
-          @click="irARutasApi" 
-          :class="['nav-item', { active: $route.path === '/admin/rutas' }]">
-          Gestionar Rutas
-        </button>
-        <button class="nav-item">Usuarios</button>
-      </nav>
+          <button 
+            @click="irADashboard" 
+            :class="['nav-item', { active: $route.path === '/admin' }]">
+            Dashboard
+          </button>
+          
+          <button 
+            @click="irARutasApi" 
+            :class="['nav-item', { active: $route.path === '/admin/rutas' }]">
+            Gestionar Rutas
+          </button>
+          
+          <button 
+            @click="irAUsuarios" 
+            :class="['nav-item', { active: $route.path === '/admin/usuarios' }]">
+            Usuarios
+          </button>
+        </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
     </aside>
 
@@ -42,24 +47,15 @@
         <button @click="obtenerRutas" class="btn-retry">Reintentar Conexión</button>
       </div>
 
-      <template v-else>
-        <section class="ia-container">
-          <RecomendacionesIA />
-        </section>
-
-        <div class="tools-bar">
-          <div class="charts-filter">
-            <label for="chart-select">Visualización:</label>
-            <select id="chart-select" v-model="selectedChart" class="minimal-select">
-              <option value="todos">Todos los indicadores</option>
-              <option value="ocupacion">Ocupación por Ruta</option>
-              <option value="capacidad">Distribución de Capacidad</option>
-              <option value="alertas">Estado de Alertas</option>
-            </select>
-          </div>
-          <button @click="exportarTodosPDF" :disabled="cargando || !!error" class="btn-exportar">
-            📄 Exportar PDF
-          </button>
+      <div v-else class="dashboard-visuals">
+        <div class="charts-filter">
+          <label for="chart-select">Visualización:</label>
+          <select id="chart-select" v-model="selectedChart" class="minimal-select">
+            <option value="todos">Todos los indicadores</option>
+            <option value="ocupacion">Ocupación por Ruta</option>
+            <option value="capacidad">Distribución de Capacidad</option>
+            <option value="alertas">Estado de Alertas</option>
+          </select>
         </div>
 
         <div class="charts-grid">
@@ -117,7 +113,7 @@
             </table>
           </div>
         </div>
-      </template>
+      </div>
     </main>
   </div>
 </template>
@@ -222,6 +218,9 @@ const exportarTablaExcel = () => {
 
 const irADashboard = () => router.push('/admin');
 const irARutasApi = () => router.push('/admin/rutas');
+const irAUsuarios = () => {
+  router.push('/admin/usuarios');
+};
 
 const cerrarSesion = async () => {
   const { logout } = useAuth();

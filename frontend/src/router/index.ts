@@ -19,11 +19,19 @@ const router = createRouter({
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
-    // --- NUEVA RUTA PARA GESTIÓN GPS ---
+    // --- RUTA PARA GESTIÓN DE RUTAS ---
     {
       path: '/admin/rutas',
       name: 'GestionRutas',
       component: GestionRutas,
+      meta: { requiresAuth: true, role: 'ADMIN' }
+    },
+
+    // --- NUEVA RUTA PARA GESTIÓN DE USUARIOS (SOLUCIÓN) ---
+    {
+      path: '/admin/usuarios',
+      name: 'AdminUsers',
+      component: AdminUsers,
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
@@ -42,22 +50,21 @@ const router = createRouter({
   ]
 })
 
-// GUARDIÁN DE NAVEGACIÓN (Protección de Rutas)
+// GUARDIÁN DE NAVEGACIÓN (Se mantiene igual, está perfecto)
 router.beforeEach(async (to, _from, next) => {
   const { restaurarSesion, obtenerRol } = useAuth()
   const autenticado = await restaurarSesion()
   const userRole = obtenerRol()
 
   if (to.meta.requiresAuth && !autenticado) {
-    next('/login') // Si no está logueado, lo mandamos al login
+    next('/login')
   } else if (to.meta.role && to.meta.role !== userRole) {
-    // Si intenta entrar a una vista que no es de su rol
     if (userRole === 'ADMIN') next('/admin')
     else if (userRole === 'JEFE') next('/jefe')
     else if (userRole === 'EMPLEADO') next('/empleado')
     else next('/login')
   } else {
-    next() // Todo en orden, le permitimos pasar
+    next()
   }
 })
 
