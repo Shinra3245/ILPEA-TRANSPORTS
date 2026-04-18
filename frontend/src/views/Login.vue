@@ -80,10 +80,6 @@ const ingresar = async () => {
   margin: 0 0 2rem 0;
 }
 
-.botones {
-  display: none;
-}
-
 .form {
   display: grid;
   gap: 0.75rem;
@@ -125,30 +121,6 @@ const ingresar = async () => {
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
-.btn-admin {
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-}
-
-.btn-admin:hover {
-  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-}
-
-.btn-jefe {
-  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
-}
-
-.btn-jefe:hover {
-  background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
-}
-
-.btn-empleado {
-  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-}
-
-.btn-empleado:hover {
-  background: linear-gradient(135deg, #34d399 0%, #6ee7b7 100%);
-}
-
 .btn-login {
   margin-top: 0.75rem;
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
@@ -163,36 +135,6 @@ const ingresar = async () => {
   color: #dc2626;
   font-size: 0.9rem;
   margin: 0.5rem 0 0;
-}
-
-.info-roles {
-  display: none;
-}
-
-.info-roles h3 {
-  margin: 0 0 1rem 0;
-  color: #1f2937;
-}
-
-.info-roles ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-.info-roles li {
-  padding: 0.5rem 0;
-  color: #4b5563;
-  font-size: 0.9rem;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.info-roles li:last-child {
-  border-bottom: none;
-}
-
-.info-roles strong {
-  color: #1f2937;
 }
 
 @media (max-width: 600px) {

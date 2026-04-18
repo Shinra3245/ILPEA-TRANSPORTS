@@ -3,6 +3,8 @@ data-science/data/*.xlsx
 data-science/data/*.csv
 data-science/data/*.pdf
 firebase-key.json
+backend/config/firebase-key.json
+backend/.env
 
 # Entornos Virtuales de Python
 venv/

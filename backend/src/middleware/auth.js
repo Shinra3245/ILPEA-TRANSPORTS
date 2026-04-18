@@ -105,7 +105,8 @@ function autorizar(accionesRequeridas) {
  * Simula un usuario basado en header X-User-Role
  */
 function autenticarSimulado(req, res, next) {
-  const rol = req.headers['x-user-role'] || ROLES.EMPLEADO;
+  const rolHeader = String(req.headers['x-user-role'] || ROLES.EMPLEADO).toUpperCase();
+  const rol = Object.values(ROLES).includes(rolHeader) ? rolHeader : ROLES.EMPLEADO;
   const userId = req.headers['x-user-id'] || 'usuario-simulado-' + Date.now();
 
   req.usuario = {
@@ -129,10 +130,17 @@ function registrarAccion(coleccion = 'acciones') {
     const originalJson = res.json.bind(res);
 
     res.json = function(data) {
+      const CLAVES_SENSIBLES = ['password', 'token', 'authorization', 'auth'];
+
       const normalizarObjeto = (valor) => {
         if (!valor || typeof valor !== 'object') return {};
         return Object.fromEntries(
-          Object.entries(valor).map(([k, v]) => [k, v === undefined ? null : v])
+          Object.entries(valor).map(([k, v]) => {
+            if (CLAVES_SENSIBLES.includes(String(k).toLowerCase())) {
+              return [k, '[REDACTED]'];
+            }
+            return [k, v === undefined ? null : v];
+          })
         );
       };
 
