@@ -1575,7 +1575,7 @@ app.post('/api/chat', autorizar('chat:enviar'), async (req, res) => {
           content: `Consulta: ${mensaje_usuario}\n\nContexto operativo entrenado: ${JSON.stringify(contextoChat)}`
         }
       ],
-      temperature: 0.2
+      temperature: 0.2,
       max_tokens: 500
     });
 
