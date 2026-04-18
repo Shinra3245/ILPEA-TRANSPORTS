@@ -208,4 +208,19 @@ const cerrarSesion = async () => {
 /* Botón Samsara */
 .btn-samsara { display: inline-block; background: #0f172a; color: #fff; padding: 0.6rem 1rem; border-radius: 6px; text-decoration: none; font-size: 0.85rem; font-weight: 600; transition: background 0.3s; }
 .btn-samsara:hover { background: #334155; }
+
+/* RESPONSIVIDAD PARA MÓVILES Y TABLETS */
+@media (max-width: 768px) {
+  .admin-layout { flex-direction: column; }
+  .sidebar { width: 100%; padding: 1.5rem; flex-direction: column; align-items: center; }
+  .brand { margin-bottom: 1.5rem; }
+  .nav-menu { width: 100%; }
+  .nav-item { text-align: center; }
+  .main-content { padding: 1.5rem 1rem; }
+  .header-flex { flex-direction: column; gap: 1rem; }
+  
+  /* Habilita scroll horizontal en la tabla de unidades GPS */
+  .table-card { overflow-x: auto; }
+  .minimal-table { min-width: 600px; }
+}
 </style>

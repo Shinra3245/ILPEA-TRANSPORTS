@@ -440,4 +440,21 @@ main {
   font-size: 0.9rem;
   line-height: 1.5;
 }
+
+/* RESPONSIVIDAD PARA MÓVILES Y TABLETS */
+@media (max-width: 768px) {
+  .header { flex-direction: column; align-items: flex-start; gap: 1.5rem; padding: 1.5rem 1rem; }
+  .usuario-info { flex-direction: column; width: 100%; align-items: stretch; gap: 1rem; }
+  .btn-logout { width: 100%; text-align: center; }
+  
+  main { padding: 1rem; }
+  .rutas-section, .info-section { padding: 1.5rem 1rem; }
+  
+  .ruta-header { flex-direction: column; align-items: flex-start; gap: 1rem; }
+  .detail { grid-template-columns: 1fr; gap: 0.2rem; border-bottom: none; margin-bottom: 1.5rem; }
+  .ruta-details { padding: 1rem; }
+  .acciones-card { padding: 0 1rem 1rem; }
+  
+  .info-cards { grid-template-columns: 1fr; }
+}
 </style>

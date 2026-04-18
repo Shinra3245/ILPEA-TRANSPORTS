@@ -163,6 +163,79 @@ function formatearValorPorcentaje(valor, decimales = 2) {
   return numero.toFixed(decimales);
 }
 
+function convertirAFecha(valor) {
+  if (!valor) return null;
+
+  if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
+    return valor;
+  }
+
+  if (typeof valor === 'object' && typeof valor.toDate === 'function') {
+    const fecha = valor.toDate();
+    return fecha instanceof Date && !Number.isNaN(fecha.getTime()) ? fecha : null;
+  }
+
+  if (typeof valor === 'object' && Number.isFinite(valor.seconds)) {
+    const fecha = new Date(Number(valor.seconds) * 1000);
+    return Number.isNaN(fecha.getTime()) ? null : fecha;
+  }
+
+  const texto = String(valor).trim();
+  if (!texto) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(texto)) {
+    const [anio, mes, dia] = texto.split('-').map(Number);
+    const fecha = new Date(anio, mes - 1, dia);
+    return Number.isNaN(fecha.getTime()) ? null : fecha;
+  }
+
+  const fecha = new Date(texto);
+  return Number.isNaN(fecha.getTime()) ? null : fecha;
+}
+
+function formatearFechaISO(fecha) {
+  const anio = fecha.getFullYear();
+  const mes = String(fecha.getMonth() + 1).padStart(2, '0');
+  const dia = String(fecha.getDate()).padStart(2, '0');
+  return `${anio}-${mes}-${dia}`;
+}
+
+function obtenerNumeroSemanaISO(fecha) {
+  const fechaUTC = new Date(Date.UTC(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()));
+  const diaSemana = fechaUTC.getUTCDay() || 7;
+  fechaUTC.setUTCDate(fechaUTC.getUTCDate() + 4 - diaSemana);
+  const inicioAnio = new Date(Date.UTC(fechaUTC.getUTCFullYear(), 0, 1));
+  return Math.ceil((((fechaUTC.getTime() - inicioAnio.getTime()) / 86400000) + 1) / 7);
+}
+
+function normalizarPeriodoRuta(rutaData, fechaDefault = new Date()) {
+  const fechaDetectada = convertirAFecha(
+    rutaData?.fecha_operacion
+    ?? rutaData?.fechaOperacion
+    ?? rutaData?.fecha
+    ?? rutaData?.dia
+    ?? rutaData?.fecha_programada
+  );
+
+  const semanaDetectada = Number(
+    rutaData?.semana_operacion
+    ?? rutaData?.semanaOperacion
+    ?? rutaData?.semana
+    ?? rutaData?.week
+    ?? rutaData?.iso_week
+  );
+
+  const fechaFinal = fechaDetectada || fechaDefault;
+  const semanaFinal = Number.isInteger(semanaDetectada) && semanaDetectada > 0
+    ? semanaDetectada
+    : obtenerNumeroSemanaISO(fechaFinal);
+
+  return {
+    fecha_operacion: formatearFechaISO(fechaFinal),
+    semana_operacion: semanaFinal
+  };
+}
+
 async function generarIdEmpleadoUnico() {
   const maxIntentos = 20;
 
@@ -1231,7 +1304,12 @@ app.get('/api/rutas', autorizar('rutas:ver'), async (req, res) => {
     const rutas = [];
 
     rutasSnapshot.forEach(doc => {
-      rutas.push({ id: doc.id, ...doc.data() });
+      const rutaData = doc.data() || {};
+      rutas.push({
+        id: doc.id,
+        ...rutaData,
+        ...normalizarPeriodoRuta(rutaData)
+      });
     });
 
     res.status(200).json({
@@ -1276,6 +1354,7 @@ app.get('/api/rutas/programadas', autorizar('rutas:ver'), async (req, res) => {
       return {
         id: rutaDoc.id,
         ...rutaData,
+        ...normalizarPeriodoRuta({ ...rutaData, fecha_programada: fecha }, convertirAFecha(fecha) || new Date()),
         programada: Boolean(programacion.data),
         programacion_id: programacion.docId,
         fecha_programada: fecha,
@@ -1497,7 +1576,7 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
         .where('fecha', '==', fechaAsignacion)
         .where('pasajeros_ids', 'array-contains', idEmpleado)
         .limit(1);
-      
+
       const asignacionesPrevias = await leerQuery(asignacionesPreviasQuery, t);
       if (!asignacionesPrevias.empty) {
         throw new Error('DUPLICATE_ASSIGNMENT: El empleado ya tiene una asignación activa en este día. Cancélala primero.');
