@@ -15,7 +15,27 @@
         {{ error }}
       </div>
 
-      <div v-else class="table-wrapper">
+      <div v-else>
+        <!-- Sección de Gráficos -->
+        <div class="charts-section">
+          <div class="charts-grid">
+            <div class="chart-item">
+              <ChartOcupacion :rutas="rutas" />
+            </div>
+            <div class="chart-item">
+              <ChartCapacidad :rutas="rutas" />
+            </div>
+            <div class="chart-item chart-item-small">
+              <ChartAlertas :rutas="rutas" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Tabla de Detalle -->
+        <h2 class="section-title">Detalle de Rutas</h2>
+      </div>
+
+      <div v-if="!cargando && !error" class="table-wrapper">
         <table class="rutas-table">
           <thead>
             <tr>
@@ -77,6 +97,9 @@
 
 <script setup lang="ts">
 import RecomendacionesIA from '../components/RecomendacionesIA.vue';
+import ChartOcupacion from '../components/ChartOcupacion.vue';
+import ChartCapacidad from '../components/ChartCapacidad.vue';
+import ChartAlertas from '../components/ChartAlertas.vue';
 import { ref, onMounted } from 'vue';
 
 // 1. Definición del Modelo de Datos (TypeScript)
@@ -246,5 +269,46 @@ onMounted(() => {
 
 .error {
   color: #ef4444;
+}
+
+/* Sección de Gráficos */
+.charts-section {
+  margin-bottom: 2rem;
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.chart-item {
+  width: 100%;
+}
+
+.chart-item-small {
+  grid-column: 1;
+  max-width: 450px;
+}
+
+.section-title {
+  color: #1e293b;
+  font-size: 1.3rem;
+  margin-bottom: 1rem;
+  border-bottom: 2px solid #e2e8f0;
+  padding-bottom: 0.5rem;
+}
+
+/* Responsive para pantallas pequeñas */
+@media (max-width: 768px) {
+  .charts-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .chart-item-small {
+    grid-column: 1;
+    max-width: 100%;
+  }
 }
 </style>
