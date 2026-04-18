@@ -3,9 +3,22 @@
     <aside class="sidebar">
       <div class="brand">ILPEA <span>ADMIN</span></div>
       <nav class="nav-menu">
-        <button @click="irAlDashboard" class="nav-item">Dashboard</button>
-        <button @click="irARutasApi" class="nav-item">Gestionar Rutas</button>
-        <button class="nav-item active">Usuarios</button>
+        <button 
+          @click="irAlDashboard" 
+          :class="['nav-item', { active: $route.path === '/admin' }]">
+          Dashboard
+        </button>
+        
+        <button 
+          @click="irARutasApi" 
+          :class="['nav-item', { active: $route.path === '/admin/rutas' }]">
+          Gestionar Rutas
+        </button>
+        
+        <button 
+          :class="['nav-item', { active: $route.path === '/admin/usuarios' }]">
+          Usuarios
+        </button>
       </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
     </aside>
@@ -38,6 +51,8 @@ import JefeCrudPanel from '../components/JefeCrudPanel.vue';
 import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue';
 
 const router = useRouter();
+// Inicializamos useAuth fuera para evitar el error de inicialización
+const { logout } = useAuth();
 
 const irAlDashboard = () => {
   router.push('/admin');
@@ -48,20 +63,27 @@ const irARutasApi = () => {
 };
 
 const cerrarSesion = async () => {
-  const { logout } = useAuth();
-  await logout();
-  router.push('/login');
+  try {
+    await logout();
+    router.push('/login');
+  } catch (error) {
+    console.error("Error al salir:", error);
+  }
 };
 </script>
 
 <style scoped>
+/* 1. LAYOUT BASE */
 .admin-layout {
   display: flex;
   min-height: 100vh;
   background: #f8f9fa;
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #1a1a1a;
   width: 100%;
 }
 
+/* 2. SIDEBAR ESTILO DASHBOARD */
 .sidebar {
   width: 240px;
   background: #000;
@@ -69,25 +91,17 @@ const cerrarSesion = async () => {
   padding: 2rem 1.5rem;
   display: flex;
   flex-direction: column;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
 }
 
-.brand {
-  font-weight: 800;
-  font-size: 1.2rem;
-  margin-bottom: 3rem;
-}
+.brand { font-weight: 800; font-size: 1.2rem; margin-bottom: 3rem; }
+.brand span { color: #666; font-weight: 400; }
 
-.brand span {
-  color: #666;
-  font-weight: 400;
-}
-
+/* 3. MENÚ DE NAVEGACIÓN */
 .nav-menu {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 2rem;
 }
 
 .nav-item {
@@ -103,43 +117,41 @@ const cerrarSesion = async () => {
   font-size: 0.9rem;
 }
 
-.nav-item:hover {
+.nav-item:hover, .nav-item.active {
   color: #fff;
 }
 
-.nav-item.active {
-  color: #fff;
-}
-
+/* 4. EL NUEVO BOTÓN ROJO DE CERRAR SESIÓN */
 .logout-btn {
-  background: none;
-  border: 1px solid #333;
-  color: #888;
-  padding: 0.6rem;
+  background: #ef4444; /* Rojo corporativo de alerta */
+  color: #ffffff;
+  padding: 0.8rem;
+  border: none;
   border-radius: 6px;
   cursor: pointer;
-  transition: 0.2s;
+  font-weight: 700;
+  transition: background 0.3s;
+  width: 100%;
 }
 
 .logout-btn:hover {
-  color: #fff;
-  border-color: #555;
+  background: #dc2626;
 }
 
+/* 5. CONTENIDO PRINCIPAL */
 .main-content {
   flex: 1;
   padding: 3rem;
-  overflow-y: auto;
-}
-
-.content-header {
-  margin-bottom: 2rem;
 }
 
 .header-flex {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+}
+
+.content-header {
+  margin-bottom: 2rem;
 }
 
 .content-header h2 {
@@ -158,11 +170,9 @@ const cerrarSesion = async () => {
   margin-bottom: 2rem;
 }
 
+/* RESPONSIVO */
 @media (max-width: 768px) {
-  .admin-layout {
-    flex-direction: column;
-  }
-
+  .admin-layout { flex-direction: column; }
   .sidebar {
     width: 100%;
     padding: 1rem;
@@ -170,30 +180,8 @@ const cerrarSesion = async () => {
     align-items: center;
     gap: 2rem;
   }
-
-  .brand {
-    padding: 0;
-    margin-bottom: 0;
-  }
-
-  .nav-menu {
-    flex-direction: row;
-    flex: 1;
-    display: flex;
-    gap: 0;
-  }
-
-  .nav-item {
-    padding: 0.5rem 0.75rem;
-    font-size: 0.85rem;
-  }
-
-  .logout-btn {
-    margin: 0;
-  }
-
-  .main-content {
-    padding: 1.5rem;
-  }
+  .brand { margin-bottom: 0; }
+  .nav-menu { flex-direction: row; margin-bottom: 0; }
+  .logout-btn { width: auto; padding: 0.5rem 1rem; }
 }
 </style>
