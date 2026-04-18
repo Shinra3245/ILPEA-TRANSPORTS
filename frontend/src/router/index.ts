@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
+import AdminUsers from '../views/AdminUsers.vue'
 import PanelJefe from '../views/PanelJefe.vue'
 import EmpleadoDashboard from '../views/EmpleadoDashboard.vue'
 import { useAuth } from '../composables/useAuth'
@@ -14,6 +15,16 @@ const router = createRouter({
       path: '/admin', 
       name: 'Admin', 
       component: AdminDashboard,
+      meta: { requiresAuth: true, role: 'ADMIN' }
+    },
+    {
+      path: '/admin/rutas',
+      redirect: '/admin'
+    },
+    { 
+      path: '/admin/usuarios', 
+      name: 'AdminUsers', 
+      component: AdminUsers,
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
     { 

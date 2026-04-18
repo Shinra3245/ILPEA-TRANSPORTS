@@ -5,27 +5,18 @@
       <nav class="nav-menu">
         <button class="nav-item active">Dashboard</button>
         <button @click="irARutasApi" class="nav-item">Gestionar Rutas</button>
-        <button class="nav-item">Usuarios</button>
+        <button @click="irAUsuarios" class="nav-item">Usuarios</button>
       </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
     </aside>
 
     <main class="main-content">
       <header class="content-header">
-        <div class="header-flex">
-          <div>
-            <h2>Estado Operativo de Red</h2>
-            <p>Aforo mínimo para justificar ruta: <strong>40%</strong></p>
-          </div>
-          <button @click="exportarTodosPDF" :disabled="cargando || !!error" class="btn-exportar">
-            📄 Exportar Reporte PDF
-          </button>
+        <div>
+          <h2>Estado Operativo de Red</h2>
+          <p>Aforo mínimo para justificar ruta: <strong>40%</strong></p>
         </div>
       </header>
-
-      <section class="ia-container">
-        <RecomendacionesIA />
-      </section>
 
       <div v-if="cargando" class="status-box">Sincronizando con Backend...</div>
       <div v-else-if="error" class="status-box error-msg">
@@ -33,15 +24,24 @@
         <button @click="obtenerRutas" class="btn-retry">Reintentar Conexión</button>
       </div>
 
-      <div v-else class="dashboard-visuals">
-        <div class="charts-filter">
-          <label for="chart-select">Visualización:</label>
-          <select id="chart-select" v-model="selectedChart" class="minimal-select">
-            <option value="todos">Todos los indicadores</option>
-            <option value="ocupacion">Ocupación por Ruta</option>
-            <option value="capacidad">Distribución de Capacidad</option>
-            <option value="alertas">Estado de Alertas</option>
-          </select>
+      <template v-else>
+        <section class="ia-container">
+          <RecomendacionesIA />
+        </section>
+
+        <div class="tools-bar">
+          <div class="charts-filter">
+            <label for="chart-select">Visualización:</label>
+            <select id="chart-select" v-model="selectedChart" class="minimal-select">
+              <option value="todos">Todos los indicadores</option>
+              <option value="ocupacion">Ocupación por Ruta</option>
+              <option value="capacidad">Distribución de Capacidad</option>
+              <option value="alertas">Estado de Alertas</option>
+            </select>
+          </div>
+          <button @click="exportarTodosPDF" :disabled="cargando || !!error" class="btn-exportar">
+            📄 Exportar PDF
+          </button>
         </div>
 
         <div class="charts-grid">
@@ -53,7 +53,7 @@
             <ChartCapacidad :rutas="rutas" />
           </div>
 
-          <div v-if="selectedChart === 'todos' || selectedChart === 'alertas'" class="chart-item chart-item-small" id="chart-alertas">
+          <div v-if="selectedChart === 'todos' || selectedChart === 'alertas'" class="chart-item" id="chart-alertas">
             <ChartAlertas :rutas="rutas" />
           </div>
         </div>
@@ -99,7 +99,7 @@
             </tbody>
           </table>
         </div>
-      </div>
+      </template>
     </main>
   </div>
 </template>
@@ -173,7 +173,14 @@ const exportarTodosPDF = async () => {
   }
 };
 
-const irARutasApi = () => console.log("Llamando a módulo de rutas...");
+const irARutasApi = () => {
+  router.push('/admin/rutas');
+};
+
+const irAUsuarios = () => {
+  router.push('/admin/usuarios');
+};
+
 const cerrarSesion = async () => {
   const { logout } = useAuth();
   await logout();
@@ -184,57 +191,388 @@ onMounted(obtenerRutas);
 </script>
 
 <style scoped>
-/* Reset Minimalista / Estilo OCI */
-.admin-layout { display: flex; min-height: 100vh; background: #f8f9fa; font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; }
+* {
+  box-sizing: border-box;
+}
 
-/* Sidebar */
-.sidebar { width: 240px; background: #000; color: #fff; padding: 2rem 1.5rem; display: flex; flex-direction: column; }
-.brand { font-weight: 800; font-size: 1.2rem; margin-bottom: 3rem; }
-.brand span { color: #666; font-weight: 400; }
-.nav-menu { flex: 1; }
-.nav-item { display: block; width: 100%; background: none; border: none; color: #888; text-align: left; padding: 0.8rem 0; cursor: pointer; transition: 0.2s; font-size: 0.9rem; }
-.nav-item.active, .nav-item:hover { color: #fff; }
-.logout-btn { background: none; border: 1px solid #333; color: #888; padding: 0.6rem; border-radius: 6px; cursor: pointer; }
+.admin-layout {
+  display: flex;
+  min-height: 100vh;
+  background: #fff;
+  width: 100%;
+}
 
-/* Main Content */
-.main-content { flex: 1; padding: 3rem; overflow-y: auto; }
-.header-flex { display: flex; justify-content: space-between; align-items: flex-start; }
-.content-header { margin-bottom: 2rem; }
-.content-header h2 { margin: 0; font-size: 1.5rem; }
-.content-header p { color: #666; font-size: 0.9rem; margin-top: 0.5rem; }
+.sidebar {
+  width: 240px;
+  background: #000;
+  color: #fff;
+  padding: 2rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #111;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
 
-/* Botón Exportar */
-.btn-exportar { background: #000; color: #fff; border: none; padding: 0.7rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem; transition: 0.3s; }
-.btn-exportar:hover { background: #333; }
+.brand {
+  font-weight: 800;
+  font-size: 1.2rem;
+  margin-bottom: 3rem;
+}
 
-/* Gráficos */
-.charts-filter { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
-.minimal-select { padding: 0.5rem; border-radius: 6px; border: 1px solid #ddd; outline: none; background: #fff; }
-.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem; margin-bottom: 3rem; }
-.chart-item { background: #fff; padding: 1.5rem; border-radius: 12px; border: 1px solid #e0e0e0; min-height: 300px; }
-.chart-item-small { grid-column: span 1; }
-.section-title { font-size: 1.1rem; margin-bottom: 1rem; color: #333; }
+.brand span {
+  color: #666;
+  font-weight: 400;
+}
 
-/* Tabla y Cards */
-.table-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; }
-.minimal-table { width: 100%; border-collapse: collapse; }
-.minimal-table th { background: #fafafa; padding: 1rem; text-align: left; font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-.minimal-table td { padding: 1.2rem 1rem; border-top: 1px solid #f0f0f0; font-size: 0.9rem; }
+.nav-menu {
+  flex: 1;
+}
 
-/* Barras de Ocupación */
-.occupancy-cell { display: flex; align-items: center; gap: 12px; }
-.bar-bg { flex: 1; background: #eee; height: 6px; border-radius: 10px; overflow: hidden; }
-.bar-fill { height: 100%; transition: 0.4s ease; }
-.bar-fill.ok { background: #10b981; }
-.bar-fill.low { background: #ef4444; }
+.nav-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: #888;
+  text-align: left;
+  padding: 0.8rem 0;
+  cursor: pointer;
+  transition: color 0.2s;
+  font-size: 0.9rem;
+}
 
-/* Tags de Estado */
-.tag { padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; }
-.tag-ok { background: #ecfdf5; color: #065f46; }
-.tag-alert { background: #fef2f2; color: #991b1b; }
+.nav-item:hover {
+  color: #fff;
+}
 
-.status-box { padding: 4rem; text-align: center; color: #888; }
-.error-msg { color: #ef4444; }
-.btn-manage { background: none; border: 1px solid #ddd; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
-.btn-retry { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; background: #000; color: #fff; border: none; border-radius: 4px; }
+.nav-item.active {
+  color: #fff;
+}
+
+.logout-btn {
+  background: none;
+  border: 1px solid #333;
+  color: #888;
+  padding: 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+}
+
+.logout-btn:hover {
+  color: #fff;
+  border-color: #555;
+}
+
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2.5rem 3rem;
+}
+
+.content-header {
+  margin-bottom: 3rem;
+}
+
+.content-header h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.8rem;
+  font-weight: 600;
+  color: #000;
+}
+
+.content-header p {
+  margin: 0;
+  color: #666;
+  font-size: 0.95rem;
+}
+
+.ia-container {
+  margin-bottom: 3rem;
+}
+
+.tools-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 3rem;
+  gap: 2rem;
+}
+
+.charts-filter {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.95rem;
+}
+
+.charts-filter label {
+  font-weight: 500;
+  color: #333;
+  white-space: nowrap;
+}
+
+.minimal-select {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  background: white;
+  cursor: pointer;
+  color: #333;
+  transition: border-color 0.2s;
+}
+
+.minimal-select:hover {
+  border-color: #999;
+}
+
+.minimal-select:focus {
+  outline: none;
+  border-color: #333;
+}
+
+.btn-exportar {
+  padding: 0.6rem 1.2rem;
+  background: #000;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.btn-exportar:hover:not(:disabled) {
+  background: #222;
+}
+
+.btn-exportar:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  margin-bottom: 3rem;
+}
+
+@media (min-width: 1200px) {
+  .charts-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .charts-grid > :nth-child(3) {
+    grid-column: 1;
+  }
+}
+
+.chart-item {
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 4px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  min-height: 350px;
+}
+
+.section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 3rem 0 1.5rem 0;
+  color: #000;
+}
+
+.table-card {
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  margin-bottom: 2rem;
+}
+
+.minimal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.minimal-table thead {
+  background: #f9f9f9;
+}
+
+.minimal-table th {
+  padding: 1rem 1.2rem;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.minimal-table td {
+  padding: 1rem 1.2rem;
+  border-bottom: 1px solid #f5f5f5;
+  color: #333;
+}
+
+.minimal-table tbody tr {
+  transition: background 0.2s;
+}
+
+.minimal-table tbody tr:hover {
+  background: #fafafa;
+}
+
+.minimal-table tbody tr.row-alert {
+  background: #fef5f5;
+}
+
+.occupancy-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 200px;
+}
+
+.bar-bg {
+  flex: 1;
+  height: 6px;
+  background: #e5e5e5;
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 80px;
+}
+
+.bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.bar-fill.ok {
+  background: #333;
+}
+
+.bar-fill.low {
+  background: #d32f2f;
+}
+
+.tag {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.tag-ok {
+  background: #f5f5f5;
+  color: #333;
+}
+
+.tag-alert {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.btn-manage {
+  padding: 0.5rem 0.9rem;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #333;
+  transition: all 0.2s;
+}
+
+.btn-manage:hover {
+  background: #eeeeee;
+  border-color: #999;
+}
+
+.status-box {
+  padding: 1.5rem;
+  margin: 2rem 0;
+  background: #f5f5f5;
+  border-radius: 4px;
+  text-align: center;
+  color: #666;
+  border-left: 3px solid #999;
+}
+
+.error-msg {
+  color: #c62828;
+  background: #ffebee !important;
+  border-left-color: #c62828 !important;
+}
+
+.btn-retry {
+  margin-top: 1rem;
+  padding: 0.6rem 1.2rem;
+  cursor: pointer;
+  background: #000;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.btn-retry:hover {
+  background: #222;
+}
+
+@media (max-width: 768px) {
+  .admin-layout {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    padding: 1rem;
+    flex-direction: row;
+    align-items: center;
+    gap: 2rem;
+  }
+
+  .brand {
+    padding: 0;
+    margin-bottom: 0;
+  }
+
+  .nav-menu {
+    flex-direction: row;
+    flex: 1;
+    display: flex;
+    gap: 0;
+  }
+
+  .nav-item {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .main-content {
+    padding: 1.5rem;
+  }
+
+  .tools-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .charts-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
