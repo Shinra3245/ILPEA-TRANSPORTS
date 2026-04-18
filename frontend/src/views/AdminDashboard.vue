@@ -12,8 +12,15 @@
 
     <main class="main-content">
       <header class="content-header">
-        <h2>Estado Operativo de Red</h2>
-        <p>Aforo mínimo para justificar ruta: <strong>40%</strong></p>
+        <div class="header-flex">
+          <div>
+            <h2>Estado Operativo de Red</h2>
+            <p>Aforo mínimo para justificar ruta: <strong>40%</strong></p>
+          </div>
+          <button @click="exportarTodosPDF" :disabled="cargando || !!error" class="btn-exportar">
+            📄 Exportar Reporte PDF
+          </button>
+        </div>
       </header>
 
       <section class="ia-container">
@@ -26,45 +33,72 @@
         <button @click="obtenerRutas" class="btn-retry">Reintentar Conexión</button>
       </div>
 
-      <div v-else class="table-card">
-        <table class="minimal-table">
-          <thead>
-            <tr>
-              <th>Ruta</th>
-              <th>Unidad</th>
-              <th>Capacidad</th>
-              <th>Ocupación %</th>
-              <th>Estado</th>
-              <th>Acción</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="ruta in rutas" :key="ruta.id" :class="{ 'row-alert': ruta.porcentaje_ocupacion_max < 40 }">
-              <td><strong>Ruta {{ ruta.ruta }}</strong></td>
-              <td>{{ ruta['tipo de unidad'] }}</td>
-              <td>{{ ruta.capacidad_real }}</td>
-              <td>
-                <div class="occupancy-cell">
-                  <div class="bar-bg">
-                    <div class="bar-fill" 
-                         :style="{ width: Math.min(ruta.porcentaje_ocupacion_max, 100) + '%' }"
-                         :class="ruta.porcentaje_ocupacion_max < 40 ? 'low' : 'ok'">
+      <div v-else class="dashboard-visuals">
+        <div class="charts-filter">
+          <label for="chart-select">Visualización:</label>
+          <select id="chart-select" v-model="selectedChart" class="minimal-select">
+            <option value="todos">Todos los indicadores</option>
+            <option value="ocupacion">Ocupación por Ruta</option>
+            <option value="capacidad">Distribución de Capacidad</option>
+            <option value="alertas">Estado de Alertas</option>
+          </select>
+        </div>
+
+        <div class="charts-grid">
+          <div v-if="selectedChart === 'todos' || selectedChart === 'ocupacion'" class="chart-item" id="chart-ocupacion">
+            <ChartOcupacion :rutas="rutas" />
+          </div>
+
+          <div v-if="selectedChart === 'todos' || selectedChart === 'capacidad'" class="chart-item" id="chart-capacidad">
+            <ChartCapacidad :rutas="rutas" />
+          </div>
+
+          <div v-if="selectedChart === 'todos' || selectedChart === 'alertas'" class="chart-item chart-item-small" id="chart-alertas">
+            <ChartAlertas :rutas="rutas" />
+          </div>
+        </div>
+
+        <h3 class="section-title">Detalle Operativo de Rutas</h3>
+        <div class="table-card">
+          <table class="minimal-table">
+            <thead>
+              <tr>
+                <th>Ruta</th>
+                <th>Unidad</th>
+                <th>Capacidad</th>
+                <th>Ocupación %</th>
+                <th>Estado</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="ruta in rutas" :key="ruta.id" :class="{ 'row-alert': ruta.porcentaje_ocupacion_max < 40 }">
+                <td><strong>Ruta {{ ruta.ruta }}</strong></td>
+                <td>{{ ruta['tipo de unidad'] }}</td>
+                <td>{{ ruta.capacidad_real }}</td>
+                <td>
+                  <div class="occupancy-cell">
+                    <div class="bar-bg">
+                      <div class="bar-fill" 
+                           :style="{ width: Math.min(ruta.porcentaje_ocupacion_max, 100) + '%' }"
+                           :class="ruta.porcentaje_ocupacion_max < 40 ? 'low' : 'ok'">
+                      </div>
                     </div>
+                    <span>{{ ruta.porcentaje_ocupacion_max.toFixed(1) }}%</span>
                   </div>
-                  <span>{{ ruta.porcentaje_ocupacion_max.toFixed(1) }}%</span>
-                </div>
-              </td>
-              <td>
-                <span :class="['tag', ruta.alerta_ocupacion === 'OK' ? 'tag-ok' : 'tag-alert']">
-                  {{ ruta.alerta_ocupacion }}
-                </span>
-              </td>
-              <td>
-                <button class="btn-manage">Control</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                </td>
+                <td>
+                  <span :class="['tag', ruta.alerta_ocupacion === 'OK' ? 'tag-ok' : 'tag-alert']">
+                    {{ ruta.alerta_ocupacion }}
+                  </span>
+                </td>
+                <td>
+                  <button class="btn-manage">Control</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </main>
   </div>
@@ -73,36 +107,51 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+// Componentes Core
 import RecomendacionesIA from '../components/RecomendacionesIA.vue';
+import ChartOcupacion from '../components/ChartOcupacion.vue';
+import ChartCapacidad from '../components/ChartCapacidad.vue';
+import ChartAlertas from '../components/ChartAlertas.vue';
+// Utilidades
+import { exportMultipleToPDF } from '../utils/exportPdf';
 
 const router = useRouter();
 const rutas = ref<any[]>([]);
 const cargando = ref(true);
 const error = ref<string | null>(null);
+const selectedChart = ref<string>('todos');
 
 const obtenerRutas = async () => {
   try {
     cargando.value = true;
     error.value = null;
-
-    // Asegúrate que el backend de Node esté corriendo en el puerto 3000
     const res = await fetch('http://localhost:3000/api/rutas');
-    
     if (!res.ok) throw new Error(`Servidor no disponible (Status: ${res.status})`);
-    
     const json = await res.json();
     
-    // Validación de estructura de datos
     if (json && json.data) {
       rutas.value = json.data.sort((a: any, b: any) => a.ruta - b.ruta);
     } else {
-      rutas.value = json; // Caso donde el array venga directo
+      rutas.value = json;
     }
   } catch (e: any) {
     console.error("Falla en API:", e);
-    error.value = "No se pudo conectar con la base de datos. Verifica el Backend.";
+    error.value = "No se pudo conectar con la base de datos.";
   } finally {
     cargando.value = false;
+  }
+};
+
+const exportarTodosPDF = async () => {
+  const fechaHoy = new Date().toLocaleDateString('es-ES').replace(/\//g, '-');
+  const nombreArchivo = `Reporte_ILPEA_${fechaHoy}`;
+  try {
+    await exportMultipleToPDF(
+      ['chart-ocupacion', 'chart-capacidad', 'chart-alertas'],
+      nombreArchivo
+    );
+  } catch (error) {
+    console.error('Error al exportar reporte:', error);
   }
 };
 
@@ -116,10 +165,10 @@ onMounted(obtenerRutas);
 </script>
 
 <style scoped>
-/* Reset Minimalista */
+/* Reset Minimalista / Estilo OCI */
 .admin-layout { display: flex; min-height: 100vh; background: #f8f9fa; font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; }
 
-/* Sidebar Estilo OCI */
+/* Sidebar */
 .sidebar { width: 240px; background: #000; color: #fff; padding: 2rem 1.5rem; display: flex; flex-direction: column; }
 .brand { font-weight: 800; font-size: 1.2rem; margin-bottom: 3rem; }
 .brand span { color: #666; font-weight: 400; }
@@ -130,11 +179,24 @@ onMounted(obtenerRutas);
 
 /* Main Content */
 .main-content { flex: 1; padding: 3rem; overflow-y: auto; }
+.header-flex { display: flex; justify-content: space-between; align-items: flex-start; }
 .content-header { margin-bottom: 2rem; }
 .content-header h2 { margin: 0; font-size: 1.5rem; }
 .content-header p { color: #666; font-size: 0.9rem; margin-top: 0.5rem; }
 
-/* Tablas y Cards */
+/* Botón Exportar */
+.btn-exportar { background: #000; color: #fff; border: none; padding: 0.7rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem; transition: 0.3s; }
+.btn-exportar:hover { background: #333; }
+
+/* Gráficos */
+.charts-filter { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; }
+.minimal-select { padding: 0.5rem; border-radius: 6px; border: 1px solid #ddd; outline: none; background: #fff; }
+.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem; margin-bottom: 3rem; }
+.chart-item { background: #fff; padding: 1.5rem; border-radius: 12px; border: 1px solid #e0e0e0; min-height: 300px; }
+.chart-item-small { grid-column: span 1; }
+.section-title { font-size: 1.1rem; margin-bottom: 1rem; color: #333; }
+
+/* Tabla y Cards */
 .table-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; }
 .minimal-table { width: 100%; border-collapse: collapse; }
 .minimal-table th { background: #fafafa; padding: 1rem; text-align: left; font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -152,7 +214,6 @@ onMounted(obtenerRutas);
 .tag-ok { background: #ecfdf5; color: #065f46; }
 .tag-alert { background: #fef2f2; color: #991b1b; }
 
-.row-alert { background-color: #fffafa; }
 .status-box { padding: 4rem; text-align: center; color: #888; }
 .error-msg { color: #ef4444; }
 .btn-manage { background: none; border: 1px solid #ddd; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
