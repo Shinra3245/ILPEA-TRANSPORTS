@@ -496,38 +496,68 @@ const exportarTablaExcel = async () => {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Programación de Rutas');
 
-    // Estilos Corporativos (Encabezado Negro)
-    worksheet.mergeCells('A1:E1');
+    // Definir anchos y llaves de columnas SIN la propiedad "header"
+    // para evitar que ExcelJS sobrescriba la Fila 1 automáticamente
+    worksheet.columns = [
+      { key: 'ruta', width: 15 },
+      { key: 'tipo_unidad', width: 18 },
+      { key: 'cap_real', width: 12 },
+      { key: 'ocupacion', width: 15 },
+      { key: 'estado', width: 20 },
+      { key: 'recomendacion', width: 25 }
+    ];
+
+    // Estilos Corporativos (Encabezado Negro en Fila 1)
+    worksheet.mergeCells('A1:F1');
     const titleCell = worksheet.getCell('A1');
     titleCell.value = 'ILPEA - PROGRAMACIÓN DE RUTAS'; 
     titleCell.font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
     titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
-    titleCell.alignment = { horizontal: 'center' };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    worksheet.getRow(1).height = 30;
 
-    // Columnas y Encabezados (Verde)
-    worksheet.columns = [
-      { header: 'RUTA', key: 'ruta', width: 15 },
-      { header: 'UNIDAD', key: 'unidad', width: 20 },
-      { header: 'CAPACIDAD', key: 'cap', width: 15 },
-      { header: 'OCUPACIÓN (%)', key: 'ocupacion', width: 20 },
-      { header: 'ESTADO IA', key: 'estado', width: 25 }
-    ];
-
+    // Encabezados Reales en la Fila 2 (Verde)
     const headerRow = worksheet.getRow(2);
+    headerRow.values = ['RUTA', 'TIPO UNIDAD', 'CAP. REAL', '% OCUPACIÓN', 'ESTADO', 'RECOMENDACIÓN SISTEMA'];
     headerRow.eachCell((cell) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF107C41' } };
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
     });
+    headerRow.height = 25;
 
     // Datos
     rutasFiltradas.value.forEach(ruta => {
-      worksheet.addRow({
+      const ocupacion = obtenerOcupacionSegura(ruta);
+      const estado = ocupacion < 40 ? 'CRÍTICO (< 40%)' : 'ÓPTIMO';
+      
+      let recomendacion = (ruta.sugerencia_right_sizing || 'MANTENER').toUpperCase();
+      if (recomendacion.includes('CAMBIAR')) recomendacion = 'CAMBIAR UNIDAD';
+      else if (recomendacion.includes('MANTENER')) recomendacion = 'MANTENER';
+
+      const row = worksheet.addRow({
         ruta: `Ruta ${ruta.ruta}`,
-        unidad: ruta['tipo de unidad'],
-        cap: ruta.capacidad_real,
-        ocupacion: `${obtenerOcupacionSegura(ruta).toFixed(2)}%`,
-        estado: ruta.sugerencia_right_sizing
+        tipo_unidad: ruta['tipo de unidad'],
+        cap_real: ruta.capacidad_real,
+        ocupacion: `${ocupacion.toFixed(1)}%`,
+        estado: estado,
+        recomendacion: recomendacion
       });
+
+      // Estilo base para las filas de datos (alineación centrada)
+      row.eachCell((cell) => {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = { bottom: {style:'thin', color: {argb: 'FFEEEEEE'}} };
+      });
+
+      // Resaltado ROJO si está en estado crítico
+      if (ocupacion < 40) {
+        row.eachCell((cell) => {
+          cell.font = { color: { argb: 'FFFF0000' }, bold: true };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        });
+      }
     });
 
     const buffer = await workbook.xlsx.writeBuffer();
