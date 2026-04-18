@@ -1,0 +1,61 @@
+# ILPEA-TRANSPORTS - Comandos listos para PowerShell
+# Copia y pega cada bloque completo en la terminal.
+
+==================================================
+1) Ir al proyecto
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS"
+
+==================================================
+2) Instalar dependencias Node (raiz, backend, frontend)
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS"
+npm install
+
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\backend"
+npm install
+
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\frontend"
+npm install
+
+==================================================
+3) Instalar dependencias Python
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS"
+python -m pip install -r requirements.txt
+
+==================================================
+4) Levantar backend
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\backend"
+node .\src\server.js
+
+==================================================
+5) Levantar frontend (en otra terminal)
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\frontend"
+npm run dev
+
+==================================================
+6) Build de frontend
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\frontend"
+npm run build
+
+==================================================
+7) Verificar dependencias instaladas
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS"
+npm list --depth=0
+
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\backend"
+npm list --depth=0
+
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\frontend"
+npm list --depth=0
+
+==================================================
+8) Probar endpoint backend rapido
+==================================================
+Set-Location "d:\PrograWEB\src\ILPEA-TRANSPORTS\backend"
+try { Invoke-WebRequest -Uri 'http://localhost:3000/api/rutas' -Method Get -ErrorAction Stop | Out-Null; 'API responde' } catch { "API error: $($_.Exception.Message)" }

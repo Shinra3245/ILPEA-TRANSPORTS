@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
+import AdminUsers from '../views/AdminUsers.vue'
 import PanelJefe from '../views/PanelJefe.vue'
 import EmpleadoDashboard from '../views/EmpleadoDashboard.vue'
 import GestionRutas from '../views/GestionRutas.vue';
@@ -17,6 +18,7 @@ const router = createRouter({
       component: AdminDashboard,
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
+
     // --- NUEVA RUTA PARA GESTIÓN GPS ---
     {
       path: '/admin/rutas',
@@ -24,7 +26,7 @@ const router = createRouter({
       component: GestionRutas,
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
-    // -----------------------------------
+
     { 
       path: '/jefe', 
       name: 'Jefe', 
