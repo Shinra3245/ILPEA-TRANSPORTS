@@ -36,7 +36,7 @@
             :disabled="cargando || exportandoExcel || !!error" 
             class="btn-exportar excel-btn"
           >
-            {{ exportandoExcel ? '⏳ Generando Excel...' : '📊 Exportar a Excel' }}
+            {{ exportandoExcel ? '⏳ Generando Excel Pro...' : '📊 Exportar a Excel' }}
           </button>
         </div>
       </header>
@@ -59,13 +59,13 @@
         </div>
 
         <div class="charts-grid">
-          <div v-if="selectedChart === 'todos' || selectedChart === 'ocupacion'" class="chart-item" id="chart-ocupacion">
+          <div v-show="selectedChart === 'todos' || selectedChart === 'ocupacion'" class="chart-item" id="chart-ocupacion">
             <ChartOcupacion :rutas="rutas" />
           </div>
-          <div v-if="selectedChart === 'todos' || selectedChart === 'capacidad'" class="chart-item" id="chart-capacidad">
+          <div v-show="selectedChart === 'todos' || selectedChart === 'capacidad'" class="chart-item" id="chart-capacidad">
             <ChartCapacidad :rutas="rutas" />
           </div>
-          <div v-if="selectedChart === 'todos' || selectedChart === 'alertas'" class="chart-item chart-item-small" id="chart-alertas">
+          <div v-show="selectedChart === 'todos' || selectedChart === 'alertas'" class="chart-item chart-item-small" id="chart-alertas">
             <ChartAlertas :rutas="rutas" />
           </div>
         </div>
@@ -85,7 +85,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="ruta in rutas" :key="ruta.id" :class="{ 'row-alert': ruta.porcentaje_ocupacion_max < 40 }">
+                <tr v-for="ruta in rutas" :key="ruta.ruta" :class="{ 'row-alert': ruta.porcentaje_ocupacion_max < 40 }">
                   <td><strong>Ruta {{ ruta.ruta }}</strong></td>
                   <td>{{ ruta['tipo de unidad'] }}</td>
                   <td>{{ ruta.capacidad_real }}</td>
@@ -97,12 +97,12 @@
                              :class="ruta.porcentaje_ocupacion_max < 40 ? 'low' : 'ok'">
                         </div>
                       </div>
-                      <span>{{ ruta.porcentaje_ocupacion_max.toFixed(1) }}%</span>
+                      <span>{{ (ruta.porcentaje_ocupacion_max || 0).toFixed(1) }}%</span>
                     </div>
                   </td>
                   <td>
                     <span :class="['tag', ruta.alerta_ocupacion === 'OK' ? 'tag-ok' : 'tag-alert']">
-                      {{ ruta.alerta_ocupacion }}
+                      {{ ruta.alerta_ocupacion || 'N/A' }}
                     </span>
                   </td>
                   <td class="no-print">
@@ -122,6 +122,10 @@
 import { ref, onMounted } from 'vue';
 import { useAuth } from '../composables/useAuth';
 import { useRouter } from 'vue-router';
+// Importamos ExcelJS y FileSaver
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
+
 import RecomendacionesIA from '../components/RecomendacionesIA.vue';
 import ChartOcupacion from '../components/ChartOcupacion.vue';
 import ChartCapacidad from '../components/ChartCapacidad.vue';
@@ -163,8 +167,19 @@ const obtenerRutas = async () => {
     }
     
     const json = await respuesta.json();
-    const data = Array.isArray(json?.data) ? json.data : [];
-    rutas.value = data.sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
+    const dataCruda = Array.isArray(json?.data) ? json.data : [];
+
+    // BLINDAJE 4: Normalización de datos para evitar .includes de undefined
+    rutas.value = dataCruda.map((ruta: any) => ({
+      ...ruta,
+      porcentaje_ocupacion_max: Number(ruta.porcentaje_ocupacion_max) || 0,
+      capacidad_real: Number(ruta.capacidad_real) || 0,
+      max_pasajeros_dia: Number(ruta.max_pasajeros_dia) || 0,
+      alerta_ocupacion: ruta.alerta_ocupacion || '', 
+      sugerencia_right_sizing: ruta.sugerencia_right_sizing || '',
+      "tipo de unidad": ruta["tipo de unidad"] || 'Desconocido'
+    })).sort((a: any, b: any) => a.ruta - b.ruta);
+
   } catch (err: any) {
     console.error('Falla en API:', err);
     error.value = err.message || 'No se pudieron cargar las rutas.';
@@ -175,42 +190,79 @@ const obtenerRutas = async () => {
 
 const exportandoExcel = ref(false);
 
-const exportarTablaExcel = () => {
+const exportarTablaExcel = async () => {
   exportandoExcel.value = true;
   
   try {
-    const encabezados = ['Ruta', 'Tipo de Unidad', 'Capacidad', 'Ocupacion (%)', 'Sugerencia Sistema', 'Estado Logistico (Umbral 40%)'];
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Reporte Operativo ILPEA');
 
-    const filas = rutas.value.map(ruta => {
-      const estadoOperativo = ruta.porcentaje_ocupacion_max < 40 ? 'CANCELADA' : 'ACTIVADA';
-      
-      return [
-        `"Ruta ${ruta.ruta}"`,
-        `"${ruta['tipo de unidad']}"`,
-        ruta.capacidad_real,
-        ruta.porcentaje_ocupacion_max.toFixed(2),
-        `"${ruta.sugerencia_right_sizing}"`,
-        `"${estadoOperativo}"`
-      ].join(','); 
+    // 1. Encabezado de Identidad Corporativa
+    worksheet.mergeCells('A1:F1');
+    const titleCell = worksheet.getCell('A1');
+    titleCell.value = 'ILPEA - REPORTE DE OPTIMIZACIÓN LOGÍSTICA';
+    titleCell.font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    // 2. Definición de Columnas
+    worksheet.columns = [
+      { header: 'RUTA', key: 'ruta', width: 12 },
+      { header: 'UNIDAD', key: 'unidad', width: 18 },
+      { header: 'CAPACIDAD', key: 'cap', width: 15 },
+      { header: 'OCUPACIÓN (%)', key: 'ocupacion', width: 18 },
+      { header: 'ESTADO', key: 'estado', width: 15 },
+      { header: 'SUGERENCIA IA', key: 'ia', width: 45 }
+    ];
+
+    // 3. Estilo de la fila de encabezados (Fila 2)
+    const headerRow = worksheet.getRow(2);
+    headerRow.values = ['RUTA', 'TIPO UNIDAD', 'CAP. REAL', '% OCUPACIÓN', 'ESTADO', 'RECOMENDACIÓN SISTEMA'];
+    headerRow.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF107C41' } }; // Verde Excel
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
+      cell.alignment = { horizontal: 'center' };
     });
 
-    const contenidoCsv = "\uFEFF" + encabezados.join(',') + '\n' + filas.join('\n');
-    
-    const blob = new Blob([contenidoCsv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
+    // 4. Inserción de datos con Formato Condicional
+    rutas.value.forEach(ruta => {
+      const porcentaje = ruta.porcentaje_ocupacion_max;
+      const estadoOperativo = porcentaje < 40 ? 'CRÍTICO (< 40%)' : 'ÓPTIMO';
+      
+      const row = worksheet.addRow({
+        ruta: `Ruta ${ruta.ruta}`,
+        unidad: ruta['tipo de unidad'],
+        cap: ruta.capacidad_real,
+        ocupacion: (porcentaje / 100), // ExcelJS maneja porcentajes en formato decimal
+        estado: estadoOperativo,
+        ia: ruta.sugerencia_right_sizing || 'Sin sugerencia'
+      });
+
+      // Formatos de celdas
+      row.getCell('ocupacion').numFmt = '0.0%';
+      row.getCell('ocupacion').alignment = { horizontal: 'center' };
+      row.getCell('cap').alignment = { horizontal: 'center' };
+      row.getCell('estado').alignment = { horizontal: 'center' };
+
+      // Formato condicional: Si es menor al 40% (0.4) pintar en rojo
+      if (porcentaje < 40) {
+        row.eachCell((cell) => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+          cell.font = { color: { argb: 'FF991B1B' }, bold: true };
+        });
+      }
+    });
+
+    // 5. Descarga del archivo compatible con navegadores
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const fechaHoy = new Date().toLocaleDateString('es-ES').replace(/\//g, '-');
-    link.setAttribute("download", `Reporte_ILPEA_${fechaHoy}.csv`);
-    
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    saveAs(blob, `Reporte_ILPEA_${fechaHoy}.xlsx`);
 
   } catch (error) {
-    console.error('Error al generar Excel:', error);
-    alert('Ocurrió un error al intentar exportar el reporte.');
+    console.error('Error al generar Excel Pro:', error);
+    alert('Ocurrió un error al intentar exportar el reporte profesional.');
   } finally {
     exportandoExcel.value = false;
   }
@@ -235,7 +287,7 @@ onMounted(obtenerRutas);
 /* 1. RESTAURAMOS EL SCROLL NATURAL DE LA PÁGINA */
 .admin-layout { 
   display: flex; 
-  min-height: 100vh; /* Permite que la pantalla crezca hacia abajo de forma natural */
+  min-height: 100vh; 
   background: #f8f9fa; 
   font-family: 'Inter', system-ui, sans-serif; 
   color: #1a1a1a; 
@@ -259,13 +311,13 @@ onMounted(obtenerRutas);
   display: flex;
   flex-direction: column;
   gap: 5px;
-  margin-bottom: 2rem; /* Separación directa entre "Usuarios" y "Cerrar Sesión" */
+  margin-bottom: 2rem;
 }
 
 .nav-item { display: block; width: 100%; background: none; border: none; color: #888; text-align: left; padding: 0.8rem 0; cursor: pointer; transition: 0.2s; font-size: 0.9rem; }
 .nav-item.active, .nav-item:hover { color: #fff; }
 
-/* 4. BOTÓN CERRAR SESIÓN (Sin margin-top: auto) */
+/* 4. BOTÓN CERRAR SESIÓN */
 .logout-btn { 
   background: #ef4444; 
   color: #ffffff; 
@@ -283,7 +335,6 @@ onMounted(obtenerRutas);
 .main-content { 
   flex: 1; 
   padding: 3rem; 
-  /* Ya no necesita overflow-y: auto porque el body general se encarga del scroll */
 }
 
 .header-flex { display: flex; justify-content: space-between; align-items: flex-start; }
