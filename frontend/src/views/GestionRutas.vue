@@ -97,7 +97,6 @@ const rutasSamsara = ref<RutaSamsara[]>([
 
 // Navegación y Sesión
 const irADashboard = () => {
-  // SOLUCIÓN: Cambiado a '/admin' para que coincida con el router/index.ts
   router.push('/admin');
 };
 
@@ -109,27 +108,66 @@ const cerrarSesion = async () => {
 </script>
 
 <style scoped>
-/* Heredamos la estructura base del AdminDashboard */
-.admin-layout { display: flex; min-height: 100vh; background: #f8f9fa; font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; }
+/* 1. SCROLL NATURAL DE LA PÁGINA (Igual al Dashboard) */
+.admin-layout { 
+  display: flex; 
+  min-height: 100vh; 
+  background: #f8f9fa; 
+  font-family: 'Inter', system-ui, sans-serif; 
+  color: #1a1a1a; 
+}
 
-/* Sidebar */
-.sidebar { width: 240px; background: #000; color: #fff; padding: 2rem 1.5rem; display: flex; flex-direction: column; }
+/* 2. MENÚ LATERAL ACOMPAÑA AL DOCUMENTO */
+.sidebar { 
+  width: 240px; 
+  background: #000; 
+  color: #fff; 
+  padding: 2rem 1.5rem; 
+  display: flex; 
+  flex-direction: column; 
+}
+
 .brand { font-weight: 800; font-size: 1.2rem; margin-bottom: 3rem; }
 .brand span { color: #666; font-weight: 400; }
-.nav-menu { flex: 1; }
+
+/* 3. ALINEACIÓN DEL MENÚ */
+.nav-menu { 
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 2rem; 
+}
+
 .nav-item { display: block; width: 100%; background: none; border: none; color: #888; text-align: left; padding: 0.8rem 0; cursor: pointer; transition: 0.2s; font-size: 0.9rem; }
 .nav-item.active, .nav-item:hover { color: #fff; }
-.logout-btn { background: none; border: 1px solid #333; color: #888; padding: 0.6rem; border-radius: 6px; cursor: pointer; }
 
-/* Main Content */
-.main-content { flex: 1; padding: 3rem; overflow-y: auto; }
+/* 4. BOTÓN CERRAR SESIÓN ESTANDARIZADO ROJO */
+.logout-btn { 
+  background: #ef4444; 
+  color: #ffffff; 
+  padding: 0.8rem; 
+  border: none;
+  border-radius: 6px; 
+  cursor: pointer; 
+  font-weight: 700; 
+  transition: background 0.3s; 
+  width: 100%;
+}
+.logout-btn:hover { background: #dc2626; }
+
+/* 5. CONTENIDO PRINCIPAL FLUYE NATURALMENTE */
+.main-content { 
+  flex: 1; 
+  padding: 3rem; 
+}
+
 .header-flex { display: flex; justify-content: space-between; align-items: flex-start; }
 .content-header { margin-bottom: 2rem; }
 .content-header h2 { margin: 0; font-size: 1.5rem; }
 .content-header p { color: #666; font-size: 0.9rem; margin-top: 0.5rem; }
 .section-title { font-size: 1.1rem; margin-bottom: 1rem; color: #333; }
 
-/* Tabla y Cards */
+/* Tabla y Cards Específicos de esta vista */
 .table-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; }
 .minimal-table { width: 100%; border-collapse: collapse; }
 .minimal-table th { background: #fafafa; padding: 1rem; text-align: left; font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -139,7 +177,7 @@ const cerrarSesion = async () => {
 .tag { padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
 .tag-ok { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
 
-/* Indicador Live */
+/* Indicador Live Samsara */
 .status-cell { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #059669; font-weight: 500; }
 .dot-live { width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; display: inline-block; animation: pulse 1.5s infinite; }
 
