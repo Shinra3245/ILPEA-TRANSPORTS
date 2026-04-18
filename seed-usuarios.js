@@ -4,7 +4,6 @@
  */
 
 const admin = require('firebase-admin');
-const path = require('path');
 
 // Inicializar Firebase
 const serviceAccount = require('./backend/config/firebase-key.json');
@@ -16,6 +15,12 @@ admin.initializeApp({
 const db = admin.firestore();
 const auth = admin.auth();
 
+const PASSWORDS_SEED = {
+  ADMIN: process.env.SEED_ADMIN_PASSWORD || 'Admin123!',
+  JEFE: process.env.SEED_JEFE_PASSWORD || 'Jefe123!',
+  EMPLEADO: process.env.SEED_EMPLEADO_PASSWORD || 'Empleado123!'
+};
+
 function esErrorAuthNoConfigurado(error) {
   const mensaje = String(error?.message || '').toLowerCase();
   return mensaje.includes('no configuration corresponding to the provided identifier');
@@ -25,21 +30,24 @@ function esErrorAuthNoConfigurado(error) {
 const USUARIOS_INICIALES = [
   {
     email: 'admin@ilpea.test',
-    password: 'Admin123!',
+    password: PASSWORDS_SEED.ADMIN,
     nombre: 'Administrador Principal',
-    rol: 'ADMIN'
+    rol: 'ADMIN',
+    jefe_uid: null
   },
   {
     email: 'jefe@ilpea.test',
-    password: 'Jefe123!',
+    password: PASSWORDS_SEED.JEFE,
     nombre: 'Jefe de Turno',
-    rol: 'JEFE'
+    rol: 'JEFE',
+    jefe_uid: null
   },
   {
     email: 'empleado@ilpea.test',
-    password: 'Empleado123!',
+    password: PASSWORDS_SEED.EMPLEADO,
     nombre: 'Empleado de Ejemplo',
-    rol: 'EMPLEADO'
+    rol: 'EMPLEADO',
+    jefe_uid: null
   }
 ];
 
@@ -61,6 +69,8 @@ async function seedUsuarios() {
       throw error;
     }
 
+    const uidsCreado = {};
+
     for (const usuarioData of USUARIOS_INICIALES) {
       try {
         // 1. Crear usuario en Firebase Auth
@@ -71,13 +81,24 @@ async function seedUsuarios() {
           emailVerified: false
         });
 
+        uidsCreado[usuarioData.rol] = userRecord.uid;
+
         console.log(`✅ Usuario creado en Auth: ${usuarioData.email} (UID: ${userRecord.uid})`);
+
+        const jefeUidFinal = usuarioData.rol === 'EMPLEADO'
+          ? uidsCreado.JEFE || null
+          : null;
+        const idEmpleadoFinal = usuarioData.rol === 'EMPLEADO'
+          ? `EMP-${userRecord.uid.slice(-6).toUpperCase()}`
+          : null;
 
         // 2. Guardar datos adicionales en Firestore
         await db.collection('usuarios').doc(userRecord.uid).set({
+          ...(idEmpleadoFinal ? { id_empleado: idEmpleadoFinal } : {}),
           email: usuarioData.email,
           nombre: usuarioData.nombre,
           rol: usuarioData.rol,
+          jefe_uid: jefeUidFinal,
           activo: true,
           creado_en: new Date(),
           creado_por: 'sistema',

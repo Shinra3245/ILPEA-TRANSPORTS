@@ -39,7 +39,19 @@ const PERMISOS = {
   'usuarios:ver': [ROLES.ADMIN],
   'usuarios:crear': [ROLES.ADMIN],
   'usuarios:actualizar': [ROLES.ADMIN],
-  'usuarios:eliminar': [ROLES.ADMIN]
+  'usuarios:eliminar': [ROLES.ADMIN],
+
+  // CRUD de empleados (ADMIN y JEFE)
+  'empleados:ver': [ROLES.ADMIN, ROLES.JEFE],
+  'empleados:crear': [ROLES.ADMIN, ROLES.JEFE],
+  'empleados:actualizar': [ROLES.ADMIN, ROLES.JEFE],
+  'empleados:eliminar': [ROLES.ADMIN, ROLES.JEFE],
+
+  // CRUD de jefes (Solo ADMIN)
+  'jefes:ver': [ROLES.ADMIN],
+  'jefes:crear': [ROLES.ADMIN],
+  'jefes:actualizar': [ROLES.ADMIN],
+  'jefes:eliminar': [ROLES.ADMIN]
 };
 
 /**
