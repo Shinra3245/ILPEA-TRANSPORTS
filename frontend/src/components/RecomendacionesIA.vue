@@ -1,12 +1,16 @@
 <template>
-  <div class="insights-container">
-    <div v-for="(item, index) in insights" :key="index" :class="['insight-card', item.prioridad]">
+  <div>
+    <div v-if="cargando" class="estado">Generando recomendaciones IA...</div>
+    <div v-else-if="error" class="estado estado-error">{{ error }}</div>
+    <div v-else class="insights-container">
+      <div v-for="(item, index) in insights" :key="index" :class="['insight-card', item.prioridad]">
       <div class="icon">💡</div>
       <div class="content">
         <h4>{{ item.titulo }}</h4>
         <p>{{ item.descripcion }}</p>
       </div>
       <div class="tag">{{ item.prioridad.toUpperCase() }}</div>
+      </div>
     </div>
   </div>
 </template>
@@ -15,12 +19,24 @@
 import { ref, onMounted } from 'vue';
 
 const insights = ref([]);
+const cargando = ref(true);
+const error = ref('');
 
 onMounted(async () => {
-  const res = await fetch('http://localhost:3000/api/insights-automaticos');
-  const data = await res.json();
-  if (data.success) {
+  try {
+    const res = await fetch('http://localhost:3000/api/insights-automaticos');
+    const data = await res.json();
+
+    if (!res.ok || !data.success) {
+      error.value = data.message || 'No se pudieron generar recomendaciones IA.';
+      return;
+    }
+
     insights.value = data.insights;
+  } catch (e) {
+    error.value = 'Error de red al consultar recomendaciones IA.';
+  } finally {
+    cargando.value = false;
   }
 });
 </script>
@@ -32,6 +48,21 @@ onMounted(async () => {
   gap: 1rem;
   margin-bottom: 2rem;
 }
+
+.estado {
+  margin-bottom: 1rem;
+  padding: 0.8rem 1rem;
+  border-radius: 8px;
+  background: #e2e8f0;
+  color: #334155;
+  font-weight: 600;
+}
+
+.estado-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .insight-card {
   display: flex;
   align-items: center;
