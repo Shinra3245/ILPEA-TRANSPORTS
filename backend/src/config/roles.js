@@ -20,21 +20,21 @@ const PERMISOS = {
   'rutas:actualizar': [ROLES.ADMIN, ROLES.JEFE],
   'rutas:eliminar': [ROLES.ADMIN],
   'rutas:sync': [ROLES.ADMIN],
-  
+
   // Asignaciones
   'asignacion:crear': [ROLES.ADMIN, ROLES.JEFE],
   'asignacion:ver': [ROLES.ADMIN, ROLES.JEFE, ROLES.EMPLEADO],
-  'asignacion:cancelar': [ROLES.ADMIN, ROLES.JEFE],
-  
+  'asignacion:cancelar': [ROLES.ADMIN, ROLES.JEFE, ROLES.EMPLEADO],
+
   // Chat/IA
   'chat:enviar': [ROLES.ADMIN, ROLES.JEFE],
   'insights:ver': [ROLES.ADMIN, ROLES.JEFE],
-  
+
   // Dashboard
   'dashboard:admin': [ROLES.ADMIN],
   'dashboard:jefe': [ROLES.ADMIN, ROLES.JEFE],
   'dashboard:empleado': [ROLES.ADMIN, ROLES.JEFE, ROLES.EMPLEADO],
-  
+
   // Usuarios
   'usuarios:ver': [ROLES.ADMIN],
   'usuarios:crear': [ROLES.ADMIN],

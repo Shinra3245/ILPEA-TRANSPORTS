@@ -1203,6 +1203,131 @@ app.get('/api/rutas/programadas', autorizar('rutas:ver'), async (req, res) => {
 });
 
 // ==========================================
+// ENDPOINT 1.1: Obtener ruta asignada del empleado autenticado
+// ==========================================
+app.get('/api/empleado/mi-ruta', autorizar('asignacion:ver'), async (req, res) => {
+  const fechaConsulta = textoNormalizado(req.query.fecha) || new Date().toISOString().slice(0, 10);
+  const turnoConsulta = turnoNormalizado(req.query.turno);
+
+  if (req.usuario?.rol !== ROLES.EMPLEADO) {
+    return res.status(403).json({
+      success: false,
+      message: 'Este endpoint solo está disponible para usuarios con rol EMPLEADO.'
+    });
+  }
+
+  const idEmpleado = textoNormalizado(req.usuario?.id_empleado) || construirIdEmpleadoDesdeUid(req.usuario?.uid);
+
+  try {
+    let query = db.collection('programacion_diaria').where('fecha', '==', fechaConsulta);
+    if (turnoConsulta) {
+      query = query.where('turno', '==', turnoConsulta);
+    }
+
+    const programacionesSnapshot = await query.get();
+    let programacionEncontrada = null;
+    let asientoAsignado = null;
+
+    for (const doc of programacionesSnapshot.docs) {
+      const data = doc.data() || {};
+      const pasajerosIds = Array.isArray(data.pasajeros_ids) ? data.pasajeros_ids : [];
+      const asientosPorEmpleado = normalizarAsientosPorEmpleado(data.asientos_por_empleado);
+
+      const estaAsignado = pasajerosIds.includes(idEmpleado)
+        || Object.prototype.hasOwnProperty.call(asientosPorEmpleado, idEmpleado);
+
+      if (!estaAsignado) {
+        continue;
+      }
+
+      const asientoDirecto = Number(asientosPorEmpleado[idEmpleado]);
+      if (Number.isInteger(asientoDirecto) && asientoDirecto > 0) {
+        asientoAsignado = asientoDirecto;
+      } else {
+        const asientosReservados = normalizarAsientosReservados(data.asientos_reservados);
+        const indicePasajero = pasajerosIds.findIndex((id) => id === idEmpleado);
+        if (indicePasajero >= 0 && Number.isInteger(asientosReservados[indicePasajero])) {
+          asientoAsignado = asientosReservados[indicePasajero];
+        }
+      }
+
+      programacionEncontrada = {
+        id: doc.id,
+        data
+      };
+      break;
+    }
+
+    if (!programacionEncontrada) {
+      return res.status(200).json({
+        success: true,
+        fecha: fechaConsulta,
+        turno: turnoConsulta || null,
+        data: null
+      });
+    }
+
+    const idRuta = textoNormalizado(programacionEncontrada.data.id_ruta);
+    if (!idRuta) {
+      return res.status(404).json({
+        success: false,
+        message: 'La asignación encontrada no contiene una ruta válida.'
+      });
+    }
+
+    const rutaDoc = await db.collection('rutas').doc(idRuta).get();
+    if (!rutaDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontró la ruta asociada a la asignación.'
+      });
+    }
+
+    const rutaData = rutaDoc.data() || {};
+    const capacidadLimite = Number(programacionEncontrada.data.capacidad_limite) || Number(rutaData.capacidad_real) || 0;
+    const asientosOcupadosDato = Number(programacionEncontrada.data.asientos_ocupados);
+    const pasajerosIds = Array.isArray(programacionEncontrada.data.pasajeros_ids)
+      ? programacionEncontrada.data.pasajeros_ids
+      : [];
+    const asientosReservados = normalizarAsientosReservados(programacionEncontrada.data.asientos_reservados);
+    const asientosOcupados = Number.isFinite(asientosOcupadosDato)
+      ? asientosOcupadosDato
+      : Math.max(pasajerosIds.length, asientosReservados.length);
+
+    return res.status(200).json({
+      success: true,
+      fecha: fechaConsulta,
+      turno: turnoConsulta || textoNormalizado(programacionEncontrada.data.turno) || null,
+      data: {
+        id: rutaDoc.id,
+        ruta: Number(rutaData.ruta) || 0,
+        nombre: String(rutaData.nombre || ''),
+        zona: String(rutaData.zona || ''),
+        nombre_ruta: String(rutaData.zona || rutaData.nombre || `Ruta ${Number(rutaData.ruta) || 0}`),
+        'tipo de unidad': String(rutaData['tipo de unidad'] || 'N/D'),
+        capacidad_real: Number(rutaData.capacidad_real) || capacidadLimite,
+        max_pasajeros_dia: Number(rutaData.max_pasajeros_dia) || 0,
+        porcentaje_ocupacion_max: Number(rutaData.porcentaje_ocupacion_max) || 0,
+        alerta_ocupacion: String(rutaData.alerta_ocupacion || 'N/D'),
+        sugerencia_right_sizing: String(rutaData.sugerencia_right_sizing || 'Sin sugerencia'),
+        asiento_asignado: asientoAsignado,
+        id_ruta: idRuta,
+        id_programacion: programacionEncontrada.id,
+        asientos_ocupados: asientosOcupados,
+        capacidad_limite: capacidadLimite,
+        asientos_disponibles: Math.max(capacidadLimite - asientosOcupados, 0)
+      }
+    });
+  } catch (error) {
+    console.error('Error obteniendo la ruta asignada del empleado:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'No se pudo obtener la ruta asignada del empleado.'
+    });
+  }
+});
+
+// ==========================================
 // ENDPOINT 2: El "Cap Check" (Asignación Atómica)
 // Solo Admin y Jefe pueden asignar empleados a rutas
 // ==========================================
@@ -1259,6 +1384,17 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
 
       if (req.usuario.rol === ROLES.JEFE && empleadoData.jefe_uid !== req.usuario.uid) {
         throw new Error('FORBIDDEN_EMPLOYEE: No puedes asignar empleados que no están bajo tu responsabilidad.');
+      }
+
+      // NUEVA VALIDACIÓN: Evitar que sea asignado a otra ruta o turno el mismo día
+      const asignacionesPreviasQuery = db.collection('programacion_diaria')
+        .where('fecha', '==', fechaAsignacion)
+        .where('pasajeros_ids', 'array-contains', idEmpleado)
+        .limit(1);
+      
+      const asignacionesPrevias = await leerQuery(asignacionesPreviasQuery, t);
+      if (!asignacionesPrevias.empty) {
+        throw new Error('DUPLICATE_ASSIGNMENT: El empleado ya tiene una asignación activa en este día. Cancélala primero.');
       }
 
       const programacion = await resolverProgramacion(fechaAsignacion, rutaEncontrada.id, turnoAsignacion, t);
@@ -1354,7 +1490,9 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
 app.post('/api/asignar/cancelar', autorizar('asignacion:cancelar'), async (req, res) => {
   const { id_empleado, id_ruta, fecha, turno, asiento } = req.body;
 
-  const idEmpleado = textoNormalizado(id_empleado);
+  const idEmpleadoBody = textoNormalizado(id_empleado);
+  const idEmpleadoPropio = textoNormalizado(req.usuario?.id_empleado) || construirIdEmpleadoDesdeUid(req.usuario?.uid);
+  const idEmpleado = req.usuario?.rol === ROLES.EMPLEADO ? idEmpleadoPropio : idEmpleadoBody;
   const idRutaSolicitada = textoNormalizado(id_ruta);
   const fechaAsignacion = textoNormalizado(fecha);
   const turnoAsignacion = turnoNormalizado(turno);
@@ -1364,6 +1502,13 @@ app.post('/api/asignar/cancelar', autorizar('asignacion:cancelar'), async (req, 
     return res.status(400).json({
       success: false,
       message: 'id_empleado, id_ruta y fecha son requeridos.'
+    });
+  }
+
+  if (req.usuario?.rol === ROLES.EMPLEADO && idEmpleadoBody && idEmpleadoBody !== idEmpleadoPropio) {
+    return res.status(403).json({
+      success: false,
+      message: 'FORBIDDEN_EMPLOYEE: Solo puedes cancelar tu propia asignación.'
     });
   }
 
