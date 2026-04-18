@@ -2,34 +2,48 @@
   <div class="login-container">
     <div class="login-card">
       <h1>ILPEA Transporte</h1>
-      <p>Selecciona tu perfil de prueba para ingresar:</p>
+      <p>Inicia sesion con tus credenciales de Firebase Auth.</p>
       
-      <div class="botones">
-        <button @click="ingresar('ADMIN')" class="btn btn-admin">
-          Entrar como ADMINISTRADOR
+      <form class="form" @submit.prevent="ingresar">
+        <label for="email">Email</label>
+        <input id="email" v-model="email" type="email" required placeholder="usuario@dominio.com" />
+
+        <label for="password">Contrasena</label>
+        <input id="password" v-model="password" type="password" required placeholder="Tu contrasena" />
+
+        <button class="btn btn-login" type="submit" :disabled="cargando">
+          {{ cargando ? 'Ingresando...' : 'Ingresar' }}
         </button>
-        <button @click="ingresar('JEFE')" class="btn btn-jefe">
-          Entrar como JEFE DE TURNO
-        </button>
-      </div>
+
+        <p v-if="error" class="error-msg">{{ error }}</p>
+      </form>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
+const { login, obtenerRol, cargando, error } = useAuth()
 
-const ingresar = (rol: string) => {
-  // Guardamos el rol en localStorage para simular la sesión
-  localStorage.setItem('userRole', rol)
+const email = ref('')
+const password = ref('')
+
+const ingresar = async () => {
+  const ok = await login(email.value.trim(), password.value)
+  if (!ok) return
+
+  const rol = obtenerRol()
   
-  // Redirigimos según el rol
   if (rol === 'ADMIN') {
     router.push('/admin')
-  } else {
+  } else if (rol === 'JEFE') {
     router.push('/jefe')
+  } else {
+    router.push('/empleado')
   }
 }
 </script>
@@ -39,33 +53,155 @@ const ingresar = (rol: string) => {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100vh;
-  background-color: #f1f5f9;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   font-family: 'Segoe UI', Tahoma, sans-serif;
+  padding: 1rem;
 }
+
 .login-card {
   background: white;
   padding: 3rem;
   border-radius: 12px;
-  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   text-align: center;
+  max-width: 500px;
+  width: 100%;
 }
+
+.login-card h1 {
+  color: #333;
+  margin: 0 0 0.5rem 0;
+  font-size: 2rem;
+}
+
+.login-card > p {
+  color: #666;
+  margin: 0 0 2rem 0;
+}
+
 .botones {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  margin-top: 2rem;
+  display: none;
 }
+
+.form {
+  display: grid;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.form label {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.form input {
+  padding: 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+.form input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
 .btn {
   padding: 1rem;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   font-weight: bold;
+  font-size: 1rem;
   cursor: pointer;
   color: white;
-  transition: opacity 0.2s;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
-.btn:hover { opacity: 0.9; }
-.btn-admin { background-color: #0f172a; }
-.btn-jefe { background-color: #2563eb; }
+
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+.btn-admin {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+}
+
+.btn-admin:hover {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+}
+
+.btn-jefe {
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+}
+
+.btn-jefe:hover {
+  background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+}
+
+.btn-empleado {
+  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+}
+
+.btn-empleado:hover {
+  background: linear-gradient(135deg, #34d399 0%, #6ee7b7 100%);
+}
+
+.btn-login {
+  margin-top: 0.75rem;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+}
+
+.btn-login:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.error-msg {
+  color: #dc2626;
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0;
+}
+
+.info-roles {
+  display: none;
+}
+
+.info-roles h3 {
+  margin: 0 0 1rem 0;
+  color: #1f2937;
+}
+
+.info-roles ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.info-roles li {
+  padding: 0.5rem 0;
+  color: #4b5563;
+  font-size: 0.9rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.info-roles li:last-child {
+  border-bottom: none;
+}
+
+.info-roles strong {
+  color: #1f2937;
+}
+
+@media (max-width: 600px) {
+  .login-card {
+    padding: 2rem;
+  }
+
+  .login-card h1 {
+    font-size: 1.5rem;
+  }
+}
 </style>

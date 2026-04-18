@@ -46,8 +46,10 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 // Importamos el nuevo componente del chatbot
 import CopilotoChat from '../components/CopilotoChat.vue'
+import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
+const { logout } = useAuth()
 
 // Datos de prueba para el Jefe (Simulando la colección programacion_diaria)
 const programacionDiaria = ref([
@@ -73,8 +75,8 @@ const asignarEmpleado = (ruta: any) => {
   }
 }
 
-const cerrarSesion = () => {
-  localStorage.removeItem('userRole')
+const cerrarSesion = async () => {
+  await logout()
   router.push('/login')
 }
 </script>

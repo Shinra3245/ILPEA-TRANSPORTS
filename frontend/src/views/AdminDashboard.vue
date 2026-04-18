@@ -78,6 +78,7 @@
 <script setup lang="ts">
 import RecomendacionesIA from '../components/RecomendacionesIA.vue';
 import { ref, onMounted } from 'vue';
+import { useAuth } from '../composables/useAuth';
 
 // 1. Definición del Modelo de Datos (TypeScript)
 interface Ruta {
@@ -95,12 +96,14 @@ interface Ruta {
 const rutas = ref<Ruta[]>([]);
 const cargando = ref<boolean>(true);
 const error = ref<string | null>(null);
+const { authHeaders } = useAuth();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 // 3. Función para consumir la API de Node.js
 const obtenerRutas = async () => {
   try {
-    // Apuntamos al servidor de Node.js que creamos en el Frente 2
-    const respuesta = await fetch('http://localhost:3000/api/rutas');
+    const headers = await authHeaders();
+    const respuesta = await fetch(`${API_BASE_URL}/api/rutas`, { headers });
     
     if (!respuesta.ok) throw new Error('Error al conectar con el servidor');
     
@@ -111,7 +114,7 @@ const obtenerRutas = async () => {
     rutas.value = json.data.sort((a: Ruta, b: Ruta) => a.ruta - b.ruta);
     
   } catch (err) {
-    error.value = 'No se pudieron cargar las rutas. Verifica que Node.js esté corriendo.';
+    error.value = 'No se pudieron cargar las rutas. Verifica sesion y backend.';
     console.error(err);
   } finally {
     cargando.value = false;
