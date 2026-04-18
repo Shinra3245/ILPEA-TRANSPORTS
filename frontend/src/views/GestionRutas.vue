@@ -14,7 +14,11 @@
           Gestionar Rutas
         </button>
         
-        <button class="nav-item">Usuarios</button>
+        <button 
+  @click="irAUsuarios" 
+  :class="['nav-item', { active: $route.path === '/admin/usuarios' }]">
+  Usuarios
+</button>
       </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
     </aside>
@@ -98,6 +102,11 @@ const rutasSamsara = ref<RutaSamsara[]>([
 // Navegación y Sesión
 const irADashboard = () => {
   router.push('/admin');
+};
+
+// Agrega esta función debajo de irADashboard
+const irAUsuarios = () => {
+  router.push('/admin/usuarios');
 };
 
 const cerrarSesion = async () => {
