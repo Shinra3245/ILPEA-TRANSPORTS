@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import os
 import requests
-import json
 
 def procesar_historico_rutas(file_path):
     """
@@ -88,7 +87,10 @@ if __name__ == "__main__":
     directorio_script = os.path.dirname(os.path.abspath(__file__))
     
     # 2. Construimos la ruta segura: subimos un nivel (..) y entramos a 'data'
-    nombre_archivo = "Reporte de usuarios Ilpea Periodo del 09 de Marzo al 15 de Marzo del 2026.xlsx" # Asegúrate de que las mayúsculas y espacios coincidan EXACTAMENTE con el nombre de tu archivo
+    nombre_archivo = os.getenv(
+        "AFOROS_FILE_NAME",
+        "Reporte de usuarios Ilpea Periodo del 09 de Marzo al 15 de Marzo del 2026.xlsx"
+    )
     ruta_archivo = os.path.join(directorio_script, "..", "data", nombre_archivo)
     
     print(f"Buscando el archivo en la ruta absoluta: {ruta_archivo}")
@@ -107,11 +109,11 @@ if __name__ == "__main__":
         datos_json = df_procesado.to_dict(orient='records')
         
         # 2. Definimos la URL de nuestro servidor Node.js local
-        url_api = "http://localhost:3000/api/rutas/sync"
+        url_api = os.getenv("ILPEA_SYNC_URL", "http://localhost:3000/api/rutas/sync")
         
         # 3. Enviamos los datos mediante una petición POST
         try:
-            respuesta = requests.post(url_api, json=datos_json)
+            respuesta = requests.post(url_api, json=datos_json, timeout=30)
             
             if respuesta.status_code == 200:
                 print("✅ ¡Éxito! Los datos de aforos y Right-Sizing ya están en Firebase.")
@@ -120,3 +122,5 @@ if __name__ == "__main__":
                 
         except requests.exceptions.ConnectionError:
             print("❌ Error: No se pudo conectar. ¿Aseguraste que el servidor Node.js esté corriendo?")
+        except requests.exceptions.Timeout:
+            print("❌ Error: La API tardó demasiado en responder (timeout de 30s).")
