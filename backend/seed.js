@@ -1,65 +1,93 @@
 const admin = require('firebase-admin');
 const serviceAccount = require('./config/firebase-key.json');
 
-// Inicializar conexión
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+// Inicialización
+if (!admin.apps.length) {
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+    });
+}
 
 const db = admin.firestore();
 
-// Datos de prueba basados en tus reportes de ILPEA
-const rutasDePrueba = [
-  {
-    ruta: 1,
-    "tipo de unidad": "Autobus",
-    capacidad_real: 30,
-    max_pasajeros_dia: 26,
-    porcentaje_ocupacion_max: 86.6,
-    alerta_ocupacion: "OK",
-    sugerencia_right_sizing: "MANTENER UNIDAD"
-  },
-  {
-    ruta: 6,
-    "tipo de unidad": "Van",
-    capacidad_real: 12,
-    max_pasajeros_dia: 3,
-    porcentaje_ocupacion_max: 25.0,
-    alerta_ocupacion: "CANCELAR RUTA - Menor al 40%",
-    sugerencia_right_sizing: "MANTENER UNIDAD"
-  },
-  {
-    ruta: 8,
-    "tipo de unidad": "Autobus",
-    capacidad_real: 30,
-    max_pasajeros_dia: 21,
-    porcentaje_ocupacion_max: 70.0,
-    alerta_ocupacion: "OK",
-    sugerencia_right_sizing: "MANTENER UNIDAD"
-  },
-  {
-    ruta: 14,
-    "tipo de unidad": "Van",
-    capacidad_real: 12,
-    max_pasajeros_dia: 3,
-    porcentaje_ocupacion_max: 25.0,
-    alerta_ocupacion: "CANCELAR RUTA - Menor al 40%",
-    sugerencia_right_sizing: "MANTENER UNIDAD"
-  }
+// Capacidades oficiales ILPEA
+const CAP = { CAMION: 30, SPRINTER: 19, VAN: 12 };
+
+const rutasOficiales = [
+    { n: 1, z: "Apaseo el Grande", t: "Camión", c: CAP.CAMION, m: 24 },
+    { n: 2, z: "Rancherías", t: "Camión", c: CAP.CAMION, m: 24 },
+    { n: 3, z: "Qro Obrera", t: "Sprinter", c: CAP.SPRINTER, m: 5 },
+    { n: 4, z: "Qro Carrillo", t: "Van", c: CAP.VAN, m: 8 },
+    { n: 5, z: "Rancho Nuevo", t: "Van", c: CAP.VAN, m: 7 },
+    { n: 6, z: "Fuentes de Balvanera", t: "Van", c: CAP.VAN, m: 3 },
+    { n: 7, z: "Celaya I", t: "Van", c: CAP.VAN, m: 6 },
+    { n: 8, z: "Santa Rita", t: "Sprinter", c: CAP.SPRINTER, m: 11 },
+    { n: 9, z: "Apaseo el Alto", t: "Camión", c: CAP.CAMION, m: 25 },
+    { n: 10, z: "Tierrablanca", t: "Van", c: CAP.VAN, m: 11 },
+    { n: 11, z: "San Miguel Octopan", t: "Camión", c: CAP.CAMION, m: 28 },
+    { n: 12, z: "San Juan de la Vega", t: "Sprinter", c: CAP.SPRINTER, m: 16 },
+    { n: 14, z: "Picacho", t: "Van", c: CAP.VAN, m: 2 },
+    { n: 15, z: "Villagrán", t: "Camión", c: CAP.CAMION, m: 10 },
+    { n: 16, z: "Comonfort", t: "Camión", c: CAP.CAMION, m: 21 },
+    { n: 17, z: "Empalme Escobedo", t: "Camión", c: CAP.CAMION, m: 26 },
+    { n: 18, z: "Juventino Rosas", t: "Camión", c: CAP.CAMION, m: 24 },
+    { n: 19, z: "Cortazar Centro", t: "Sprinter", c: CAP.SPRINTER, m: 6 },
+    { n: 20, z: "Cortazar", t: "Van", c: CAP.VAN, m: 6 },
+    { n: 21, z: "Jerecuaro", t: "Camión", c: CAP.CAMION, m: 22 },
+    { n: 22, z: "Salvatierra", t: "Camión", c: CAP.CAMION, m: 25 },
+    { n: 23, z: "Tarimoro", t: "Camión", c: CAP.CAMION, m: 18 },
+    { n: 24, z: "Acambaro", t: "Camión", c: CAP.CAMION, m: 27 },
+    { n: 25, z: "Yuriria", t: "Camión", c: CAP.CAMION, m: 20 },
+    { n: 26, z: "Moroleon", t: "Camión", c: CAP.CAMION, m: 15 },
+    { n: 27, z: "Uriangato", t: "Camión", c: CAP.CAMION, m: 19 },
+    { n: 28, z: "Valle de Santiago", t: "Camión", c: CAP.CAMION, m: 23 },
+    { n: 29, z: "Jaral del Progreso", t: "Camión", c: CAP.CAMION, m: 12 },
+    { n: 30, z: "Salamanca", t: "Camión", c: CAP.CAMION, m: 26 },
+    { n: 31, z: "Irapuato", t: "Camión", c: CAP.CAMION, m: 21 },
+    { n: 32, z: "Leon", t: "Camión", c: CAP.CAMION, m: 18 },
+    { n: 33, z: "Silao", t: "Camión", c: CAP.CAMION, m: 10 }
 ];
 
-async function insertarDatos() {
-  console.log("🚀 Iniciando inserción de datos de prueba...");
-  const batch = db.batch();
+async function sync() {
+    try {
+        console.log("--- INICIANDO LIMPIEZA TOTAL ---");
+        const colRef = db.collection('rutas');
+        const snapshot = await colRef.get();
+        
+        // Borrar todo lo anterior para que no se encimen datos de 37 asientos
+        const batchDelete = db.batch();
+        snapshot.docs.forEach(doc => batchDelete.delete(doc.ref));
+        await batchDelete.commit();
+        console.log(`✅ ${snapshot.size} rutas antiguas borradas.`);
 
-  rutasDePrueba.forEach((data) => {
-    const docRef = db.collection('rutas').doc(`Ruta_${data.ruta}`);
-    batch.set(docRef, data);
-  });
+        console.log("--- INSERTANDO 33 RUTAS OFICIALES ---");
+        const batchInsert = db.batch();
 
-  await batch.commit();
-  console.log("✅ ¡Datos insertados correctamente! Revisa tu Frontend ahora.");
-  process.exit();
+        rutasOficiales.forEach(r => {
+            const porcentaje = (r.m / r.c) * 100;
+            const docRef = colRef.doc(`ruta_${r.n}`);
+            
+            batchInsert.set(docRef, {
+                id: docRef.id,
+                ruta: r.n,
+                zona: r.z,
+                "tipo de unidad": r.t,
+                capacidad_real: r.c,
+                max_pasajeros_dia: r.m,
+                porcentaje_ocupacion_max: porcentaje,
+                alerta_ocupacion: porcentaje < 40 ? "BAJO AFORO" : "OK",
+                sugerencia_right_sizing: porcentaje < 40 ? "CAMBIAR UNIDAD" : "MANTENER",
+                asientos_ocupados: [] // Iniciamos limpio para el Jefe
+            });
+        });
+
+        await batchInsert.commit();
+        console.log("🏆 ÉXITO: Base de datos sincronizada con 33 rutas.");
+    } catch (e) {
+        console.error("❌ ERROR:", e);
+    } finally {
+        process.exit();
+    }
 }
 
-insertarDatos().catch(console.error);
+sync();
