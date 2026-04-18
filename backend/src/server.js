@@ -84,9 +84,80 @@ app.post('/api/asignar', async (req, res) => {
   }
 });
 
+// ==========================================
+// ENDPOINT 3: Sincronizar datos desde Python
+// ==========================================
+app.post('/api/rutas/sync', async (req, res) => {
+  const rutasData = req.body; // Esperamos recibir un arreglo de rutas desde Python
+  
+  try {
+    const batch = db.batch(); // Usamos batch para escribir todo de una sola vez
+    
+    rutasData.forEach(ruta => {
+      // Usamos el número de ruta para crear un ID único (ej. "Ruta_1")
+      const docId = `Ruta_${ruta.ruta.toString().trim()}`;
+      const docRef = db.collection('rutas').doc(docId);
+      
+      // .set() con { merge: true } actualiza si ya existe, o lo crea si es nuevo
+      batch.set(docRef, ruta, { merge: true }); 
+    });
+
+    await batch.commit();
+    console.log(`📥 Sincronización exitosa: ${rutasData.length} rutas actualizadas.`);
+    res.status(200).json({ success: true, message: "Datos sincronizados con Firebase" });
+    
+  } catch (error) {
+    console.error("Error sincronizando rutas:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Inicializar el servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor ILPEA corriendo en http://localhost:${PORT}`);
   console.log(`Conectado a Firebase Project: ${serviceAccount.project_id}`);
+});
+
+
+// ==========================================
+// ENDPOINT 5: Insights Automáticos (Proactivo)
+// ==========================================
+app.get('/api/insights-automaticos', async (req, res) => {
+  try {
+    // 1. Extraemos TODAS las rutas de Firebase
+    const snapshot = await db.collection('rutas').get();
+    const rutas = [];
+    snapshot.forEach(doc => rutas.push(doc.data()));
+
+    // 2. El Prompt Maestro
+    const systemPrompt = `
+      Actúa como un Analista Senior de Logística e IA para ILPEA. Genera "Insights de Acción" inmediatos basados en los datos de rutas que recibas.
+      
+      REGLAS:
+      1. Prioridad ALTA: Rutas con ocupación < 40%.
+      2. Prioridad MEDIA: Autobuses con <= 12 pasajeros (Sugerir Van).
+      
+      SALIDA ESTRICTA: Devuelve ÚNICAMENTE un objeto JSON con una propiedad "insights" que contenga un arreglo de objetos con "titulo", "descripcion", "prioridad" (alta/media/baja), y "ruta_id". No incluyas texto extra.
+    `;
+
+    // 3. Consulta a OpenAI enviando el prompt y los datos de Firebase
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo-1106", 
+      response_format: { type: "json_object" }, 
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Analiza estos datos y genera el JSON: ${JSON.stringify(rutas)}` }
+      ],
+      temperature: 0.2
+    });
+
+    // 4. Se lo enviamos procesado al Frontend
+    const dataIA = JSON.parse(completion.choices[0].message.content);
+    res.json({ success: true, insights: dataIA.insights });
+
+  } catch (error) {
+    console.error("Error generando insights:", error);
+    res.status(500).json({ success: false, message: "Error conectando con la IA" });
+  }
 });

@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import os
+import requests
+import json
 
 def procesar_historico_rutas(file_path):
     """
@@ -95,5 +97,26 @@ if __name__ == "__main__":
     df_procesado = procesar_historico_rutas(ruta_archivo)
     
     if df_procesado is not None:
-        print("\n¡Datos procesados con éxito!")
-        print(df_procesado.head())
+        print("\n¡Datos procesados con éxito! Preparando envío a la API...")
+        
+        # --- NUEVA LÍNEA DE LIMPIEZA ---
+        # Reemplazamos cualquier NaN o Infinito matemático con un 0 limpio
+        df_procesado = df_procesado.replace([np.nan, np.inf, -np.inf], 0)
+        
+        # 1. Convertimos el DataFrame a un formato de lista de diccionarios (JSON-friendly)
+        datos_json = df_procesado.to_dict(orient='records')
+        
+        # 2. Definimos la URL de nuestro servidor Node.js local
+        url_api = "http://localhost:3000/api/rutas/sync"
+        
+        # 3. Enviamos los datos mediante una petición POST
+        try:
+            respuesta = requests.post(url_api, json=datos_json)
+            
+            if respuesta.status_code == 200:
+                print("✅ ¡Éxito! Los datos de aforos y Right-Sizing ya están en Firebase.")
+            else:
+                print(f"⚠️ Error en la API: {respuesta.status_code} - {respuesta.text}")
+                
+        except requests.exceptions.ConnectionError:
+            print("❌ Error: No se pudo conectar. ¿Aseguraste que el servidor Node.js esté corriendo?")
