@@ -3,8 +3,18 @@
     <aside class="sidebar">
       <div class="brand">ILPEA <span>ADMIN</span></div>
       <nav class="nav-menu">
-        <button class="nav-item active">Dashboard</button>
-        <button @click="irARutasApi" class="nav-item">Gestionar Rutas</button>
+        <button 
+          @click="irADashboard" 
+          :class="['nav-item', { active: $route.path === '/admin' }]">
+          Dashboard
+        </button>
+        
+        <button 
+          @click="irARutasApi" 
+          :class="['nav-item', { active: $route.path === '/admin/rutas' }]">
+          Gestionar Rutas
+        </button>
+        
         <button class="nav-item">Usuarios</button>
       </nav>
       <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
@@ -173,7 +183,16 @@ const exportarTodosPDF = async () => {
   }
 };
 
-const irARutasApi = () => console.log("Llamando a módulo de rutas...");
+// --- NUEVAS FUNCIONES DE NAVEGACIÓN ---
+const irADashboard = () => {
+  router.push('/admin');
+};
+
+const irARutasApi = () => {
+  router.push('/admin/rutas');
+};
+// --------------------------------------
+
 const cerrarSesion = async () => {
   const { logout } = useAuth();
   await logout();
