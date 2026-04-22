@@ -19,3 +19,4 @@ node_modules/
 # Logs y SO
 *.log
 .DS_Store
+archivos/
