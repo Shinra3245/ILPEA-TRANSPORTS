@@ -1,33 +1,36 @@
 <template>
   <div class="chat-wrapper">
-    <button class="btn-toggle" @click="chatAbierto = !chatAbierto">
-      💬 Copiloto
+    <button type="button" class="btn-toggle btn-with-icon" @click="chatAbierto = !chatAbierto">
+      <AppIcon name="message-square" :size="18" />
+      <span>Asistente</span>
     </button>
 
     <div v-if="chatAbierto" class="chat-window">
       <div class="chat-header">
-        <h4>Copiloto Logístico ILPEA</h4>
-        <button class="btn-close" @click="chatAbierto = false">✖</button>
+        <h4>Asistente operativo</h4>
+        <button type="button" class="btn-close" @click="chatAbierto = false" aria-label="Cerrar">
+          <AppIcon name="x" :size="18" />
+        </button>
       </div>
 
       <div class="chat-history" ref="historialDiv">
-        <div 
-          v-for="(msg, index) in historial" 
+        <div
+          v-for="(msg, index) in historial"
           :key="index"
           :class="['mensaje', msg.role === 'user' ? 'msg-user' : 'msg-bot']"
         >
           {{ msg.text }}
         </div>
         <div v-if="cargando" class="mensaje msg-bot escribiendo">
-          El Copiloto está analizando...
+          Procesando...
         </div>
       </div>
 
       <form class="chat-input-area" @submit.prevent="enviarMensaje">
-        <input 
-          v-model="inputMensaje" 
-          type="text" 
-          :placeholder="placeholderInput" 
+        <input
+          v-model="inputMensaje"
+          type="text"
+          :placeholder="placeholderInput"
           :disabled="cargando"
         />
         <button type="submit" :disabled="!inputMensaje || cargando">Enviar</button>
@@ -39,6 +42,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { useAuth } from '../composables/useAuth';
+import AppIcon from './ui/AppIcon.vue';
 
 interface Mensaje {
   role: 'user' | 'bot';
@@ -64,16 +68,16 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000
 
 const placeholderInput = computed(() =>
   props.scope === 'JEFE'
-    ? 'Pregunta por empleados, turnos o reasignaciones...'
-    : 'Pregunta por rutas, ocupación o decisiones IA...'
+    ? 'Turnos, rutas o empleados...'
+    : 'Ocupación, rutas o planes...'
 );
 
 const mensajeInicial = computed(() => {
   if (props.scope === 'JEFE') {
-    return 'Hola. Soy tu Copiloto Logístico para Jefes. Puedo ayudarte con turnos, rutas y empleados a tu cargo.';
+    return 'Consulta turnos, rutas y empleados asignados.';
   }
 
-  return 'Hola. Soy tu Copiloto Logístico para Administración. Puedo ayudarte con rutas, ocupación y planes IA.';
+  return 'Consulta ocupación, rutas y planes recientes.';
 });
 
 const historial = ref<Mensaje[]>([{ role: 'bot', text: mensajeInicial.value }]);
@@ -118,10 +122,10 @@ const enviarMensaje = async () => {
     if (respuesta.ok && data.success) {
       historial.value.push({ role: 'bot', text: data.respuesta });
     } else {
-      historial.value.push({ role: 'bot', text: data.message || 'Error: No pude conectarme con la central.' });
+      historial.value.push({ role: 'bot', text: data.message || 'No se pudo obtener respuesta.' });
     }
-  } catch (error) {
-    historial.value.push({ role: 'bot', text: 'Error de red. Asegúrate de que el servidor esté corriendo.' });
+  } catch {
+    historial.value.push({ role: 'bot', text: 'Error de conexión con el servidor.' });
   } finally {
     cargando.value = false;
   }
@@ -134,16 +138,16 @@ const enviarMensaje = async () => {
   bottom: 20px;
   right: 20px;
   z-index: 1000;
-  font-family: 'Segoe UI', Tahoma, sans-serif;
+  font-family: Inter, system-ui, sans-serif;
 }
 
 .btn-toggle {
-  background-color: #0f172a;
+  background-color: var(--ilpea-black);
   color: white;
   border: none;
   border-radius: 9999px;
-  padding: 1rem 1.5rem;
-  font-weight: bold;
+  padding: 0.85rem 1.25rem;
+  font-weight: 600;
   cursor: pointer;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }
@@ -156,14 +160,15 @@ const enviarMensaje = async () => {
   height: 450px;
   background: white;
   border-radius: 12px;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--ilpea-border);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .chat-header {
-  background-color: #0f172a;
+  background-color: var(--ilpea-black);
   color: white;
   padding: 1rem;
   display: flex;
@@ -173,7 +178,8 @@ const enviarMensaje = async () => {
 
 .chat-header h4 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
 .btn-close {
@@ -181,7 +187,8 @@ const enviarMensaje = async () => {
   border: none;
   color: white;
   cursor: pointer;
-  font-size: 1.2rem;
+  display: inline-flex;
+  padding: 0.15rem;
 }
 
 .chat-history {
@@ -203,7 +210,7 @@ const enviarMensaje = async () => {
 }
 
 .msg-user {
-  background-color: #2563eb;
+  background-color: var(--ilpea-black);
   color: white;
   align-self: flex-end;
   border-bottom-right-radius: 0;
@@ -237,14 +244,14 @@ const enviarMensaje = async () => {
 }
 
 .chat-input-area button {
-  background-color: #2563eb;
+  background-color: var(--ilpea-black);
   color: white;
   border: none;
   padding: 0.5rem 1rem;
   margin-left: 0.5rem;
   border-radius: 4px;
   cursor: pointer;
-  font-weight: bold;
+  font-weight: 600;
 }
 
 .chat-input-area button:disabled {

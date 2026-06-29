@@ -1,18 +1,36 @@
 // backend/src/server.js
 const express = require('express');
 const cors = require('cors');
-const admin = require('firebase-admin');
-const nodemailer = require('nodemailer');
 const path = require('path');
 const crypto = require('crypto');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const adminRoutes = require('./routes/admin');
+const authRoutes = require('./routes/auth');
 const app = express();
-
-
-// Importar configuración de RBAC
-const { ROLES, obtenerPermisosDelRol } = require('./config/roles');
+// Importar configuración de RBAC y utilidades
+const { ROLES } = require('./config/roles');
 const { autenticar, autorizar, autenticarSimulado, registrarAccion } = require('./middleware/auth');
+const utils = require('./lib/utils');
+const {
+  db,
+  admin,
+  crearClienteOpenAI,
+  esTimeoutOpenAI,
+  generarRespuestaFallback,
+  convertirAFecha,
+  obtenerNumeroSemanaISO,
+  esEmailValido,
+  generarPasswordTemporal,
+  programarEnvioCorreoAltaEmpleado,
+  programarEnvioCorreoAltaJefe,
+  verificarTransporterSMTP
+} = utils;
+
+const NOTIFICACION_CORREO_EN_PROCESO = {
+  enviado: null,
+  motivo: 'ENVIO_EN_PROCESO',
+  detalle: 'El correo se envia en segundo plano.'
+};
 
 function cargarCredencialesFirebase() {
   if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
@@ -26,187 +44,7 @@ function cargarCredencialesFirebase() {
   return require(keyPath);
 }
 
-const serviceAccount = cargarCredencialesFirebase();
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
-
-const db = admin.firestore();
-
-function esEmailValido(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
-}
-
-function generarPasswordTemporal(longitud = 12) {
-  const caracteres = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
-  let resultado = '';
-
-  for (let i = 0; i < longitud; i += 1) {
-    resultado += caracteres[crypto.randomInt(0, caracteres.length)];
-  }
-
-  return resultado;
-}
-
-let smtpTransporter = null;
-
-function escapeHtml(valor) {
-  return String(valor || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-function obtenerTransporterSMTP() {
-  if (smtpTransporter) {
-    return smtpTransporter;
-  }
-
-  const host = String(process.env.MAIL_HOST || '').trim();
-  const user = String(process.env.MAIL_USER || '').trim();
-  const pass = String(process.env.MAIL_PASS || '').trim();
-  const port = Number(process.env.MAIL_PORT || 465);
-  const secure = String(process.env.MAIL_SECURE || 'true').trim().toLowerCase() !== 'false';
-
-  if (!host || !user || !pass) {
-    return null;
-  }
-
-  smtpTransporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: {
-      user,
-      pass
-    }
-  });
-
-  return smtpTransporter;
-}
-
-async function enviarCorreoAltaEmpleado({ nombre, email, idEmpleado, password }) {
-  const transporter = obtenerTransporterSMTP();
-  if (!transporter) {
-    return {
-      enviado: false,
-      motivo: 'SMTP_NO_CONFIGURADO'
-    };
-  }
-
-  const remitenteEmail = String(process.env.MAIL_FROM_EMAIL || process.env.MAIL_USER || '').trim();
-  const remitenteNombre = String(process.env.MAIL_FROM_NAME || 'ILPEA TRANSPORTS').trim();
-
-  const nombreSeguro = escapeHtml(nombre);
-  const emailSeguro = escapeHtml(email);
-  const idSeguro = escapeHtml(idEmpleado);
-  const passwordSeguro = escapeHtml(password);
-
-  const asunto = 'Credenciales de acceso - ILPEA TRANSPORTS';
-  const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #111827;">
-      <h2 style="margin-bottom: 8px;">Bienvenido(a) a ILPEA TRANSPORTS</h2>
-      <p>Se ha creado tu usuario con los siguientes datos:</p>
-      <ul>
-        <li><strong>ID de empleado:</strong> ${idSeguro}</li>
-        <li><strong>Nombre:</strong> ${nombreSeguro}</li>
-        <li><strong>Correo:</strong> ${emailSeguro}</li>
-        <li><strong>Contraseña temporal:</strong> ${passwordSeguro}</li>
-      </ul>
-      <p>Por seguridad, cambia tu contraseña después de iniciar sesión.</p>
-      <hr style="border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">Este es un mensaje automático, por favor no respondas este correo.</p>
-    </div>
-  `;
-
-  const text = [
-    'Bienvenido(a) a ILPEA TRANSPORTS.',
-    'Se ha creado tu usuario con los siguientes datos:',
-    `ID de empleado: ${idEmpleado}`,
-    `Nombre: ${nombre}`,
-    `Correo: ${email}`,
-    `Contrasena temporal: ${password}`,
-    'Por seguridad, cambia tu contrasena despues de iniciar sesion.'
-  ].join('\n');
-
-  try {
-    await transporter.sendMail({
-      from: remitenteEmail ? `"${remitenteNombre}" <${remitenteEmail}>` : undefined,
-      to: email,
-      subject: asunto,
-      html,
-      text
-    });
-
-    return {
-      enviado: true,
-      motivo: null
-    };
-  } catch (error) {
-    console.warn('No se pudo enviar correo de alta de empleado:', error.message);
-    return {
-      enviado: false,
-      motivo: 'SMTP_ENVIO_FALLIDO'
-    };
-  }
-}
-
-function formatearValorPorcentaje(valor, decimales = 2) {
-  const numero = Number(valor);
-  if (!Number.isFinite(numero)) {
-    return 'N/D';
-  }
-
-  return numero.toFixed(decimales);
-}
-
-function convertirAFecha(valor) {
-  if (!valor) return null;
-
-  if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
-    return valor;
-  }
-
-  if (typeof valor === 'object' && typeof valor.toDate === 'function') {
-    const fecha = valor.toDate();
-    return fecha instanceof Date && !Number.isNaN(fecha.getTime()) ? fecha : null;
-  }
-
-  if (typeof valor === 'object' && Number.isFinite(valor.seconds)) {
-    const fecha = new Date(Number(valor.seconds) * 1000);
-    return Number.isNaN(fecha.getTime()) ? null : fecha;
-  }
-
-  const texto = String(valor).trim();
-  if (!texto) return null;
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(texto)) {
-    const [anio, mes, dia] = texto.split('-').map(Number);
-    const fecha = new Date(anio, mes - 1, dia);
-    return Number.isNaN(fecha.getTime()) ? null : fecha;
-  }
-
-  const fecha = new Date(texto);
-  return Number.isNaN(fecha.getTime()) ? null : fecha;
-}
-
-function formatearFechaISO(fecha) {
-  const anio = fecha.getFullYear();
-  const mes = String(fecha.getMonth() + 1).padStart(2, '0');
-  const dia = String(fecha.getDate()).padStart(2, '0');
-  return `${anio}-${mes}-${dia}`;
-}
-
-function obtenerNumeroSemanaISO(fecha) {
-  const fechaUTC = new Date(Date.UTC(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()));
-  const diaSemana = fechaUTC.getUTCDay() || 7;
-  fechaUTC.setUTCDate(fechaUTC.getUTCDate() + 4 - diaSemana);
-  const inicioAnio = new Date(Date.UTC(fechaUTC.getUTCFullYear(), 0, 1));
-  return Math.ceil((((fechaUTC.getTime() - inicioAnio.getTime()) / 86400000) + 1) / 7);
-}
+const openai = crearClienteOpenAI();
 
 function normalizarPeriodoRuta(rutaData, fechaDefault = new Date()) {
   const fechaDetectada = convertirAFecha(
@@ -526,66 +364,6 @@ function construirProgramacionBase({ fecha, idRuta, turno, rutaData, uidCreador 
     actualizado_en: new Date(),
     actualizado_por: uidCreador
   };
-}
-
-function crearClienteOpenAI() {
-  if (!process.env.OPENAI_API_KEY) return null;
-
-  try {
-    const OpenAI = require('openai');
-    return new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      timeout: 60000, // 👈 Aumentamos a 60 segundos para mayor estabilidad en OCI
-      maxRetries: 2    // 👈 Permitimos un reintento automático si falla la conexión
-    });
-  } catch (error) {
-    console.warn('OpenAI deshabilitado: error de carga.');
-    return null;
-  }
-}
-
-const openai = crearClienteOpenAI();
-
-function esTimeoutOpenAI(error) {
-  const texto = String(error?.message || '').toLowerCase();
-  const nombre = String(error?.name || '').toLowerCase();
-  const codigo = String(error?.code || '').toLowerCase();
-
-  return (
-    texto.includes('request timed out')
-    || texto.includes('timeout')
-    || nombre.includes('timeout')
-    || codigo.includes('etimedout')
-    || codigo.includes('timeout')
-  );
-}
-
-function generarRespuestaFallback(mensajeUsuario, rutas) {
-  const totalRutas = rutas.length;
-  const rutasCriticas = rutas.filter((r) => Number(r.porcentaje_ocupacion_max) < 40);
-  const rutasRightSizing = rutas.filter(
-    (r) =>
-      String(r['tipo de unidad'] || '').toLowerCase().includes('autobus') &&
-      Number(r.max_pasajeros_dia) <= 12
-  );
-
-  const consulta = String(mensajeUsuario || '').toLowerCase();
-
-  if (consulta.includes('critica') || consulta.includes('cancel') || consulta.includes('40')) {
-    if (!rutasCriticas.length) return 'No hay rutas en condición crítica (< 40%) con la data actual.';
-    const listado = rutasCriticas
-      .map((r) => `Ruta ${r.ruta} (${formatearValorPorcentaje(r.porcentaje_ocupacion_max)}%)`)
-      .join(', ');
-    return `Rutas críticas detectadas: ${listado}. Recomiendo revisión operativa inmediata.`;
-  }
-
-  if (consulta.includes('van') || consulta.includes('right') || consulta.includes('unidad')) {
-    if (!rutasRightSizing.length) return 'No hay rutas candidatas claras para cambio de unidad en este momento.';
-    const listado = rutasRightSizing.map((r) => `Ruta ${r.ruta}`).join(', ');
-    return `Rutas candidatas a right-sizing (Autobús -> Van): ${listado}.`;
-  }
-
-  return `Resumen rápido: ${totalRutas} rutas analizadas, ${rutasCriticas.length} con ocupación menor a 40% y ${rutasRightSizing.length} candidatas a right-sizing.`;
 }
 
 function formatearValorPorcentaje(valor, decimales = 2) {
@@ -1300,12 +1078,12 @@ app.use((req, res, next) => {
   return autenticar(req, res, next);
 });
 
-
-app.use('/api', adminRoutes);
-
+app.use('/api', authRoutes);
 
 // Middleware de logging/auditoría
-app.use(registrarAccion('acciones'));
+app.use(registrarAccion('acciones', {
+  rutasExcluidas: ['/api/auth/me', '/api/test-ilpea']
+}));
 
 // Evita caída completa del proceso por errores async no manejados.
 process.on('unhandledRejection', (reason) => {
@@ -2588,29 +2366,6 @@ app.get('/api/ai/planes-ejecutados', autorizar('insights:ver'), async (req, res)
 });
 
 // ==========================================
-// ENDPOINT 6: Obtener info del usuario autenticado
-// ==========================================
-app.get('/api/auth/me', (req, res) => {
-  if (!req.usuario) {
-    return res.status(401).json({
-      success: false,
-      message: 'No autenticado'
-    });
-  }
-
-  res.json({
-    success: true,
-    usuario: {
-      uid: req.usuario.uid,
-      email: req.usuario.email,
-      nombre: req.usuario.nombre,
-      rol: req.usuario.rol,
-      permisos: obtenerPermisosDelRol(req.usuario.rol)
-    }
-  });
-});
-
-// ==========================================
 // ENDPOINT 7: Crear usuario (Solo Admin)
 // ==========================================
 app.post('/api/usuarios/crear', autorizar('usuarios:crear'), async (req, res) => {
@@ -2805,7 +2560,7 @@ app.post('/api/empleados', autorizar('empleados:crear'), async (req, res) => {
       activo: true
     });
 
-    const notificacionCorreo = await enviarCorreoAltaEmpleado({
+    programarEnvioCorreoAltaEmpleado({
       nombre: String(nombre).trim(),
       email: String(email).trim(),
       idEmpleado: idEmpleadoFinal,
@@ -2814,14 +2569,12 @@ app.post('/api/empleados', autorizar('empleados:crear'), async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: notificacionCorreo.enviado
-        ? 'Empleado creado exitosamente y correo enviado.'
-        : 'Empleado creado exitosamente. No se pudo enviar el correo de credenciales.',
+      message: 'Empleado creado exitosamente. Las credenciales se muestran abajo y el correo se envia en segundo plano.',
       credenciales_generadas: {
         id_empleado: idEmpleadoFinal,
         password_temporal: passwordManual ? null : passwordFinal
       },
-      notificacion_email: notificacionCorreo,
+      notificacion_email: NOTIFICACION_CORREO_EN_PROCESO,
       usuario: {
         uid: userRecord.uid,
         id_empleado: idEmpleadoFinal,
@@ -3052,10 +2805,10 @@ app.get('/api/jefes', autorizar('jefes:ver'), async (req, res) => {
 app.post('/api/jefes', autorizar('jefes:crear'), async (req, res) => {
   const { email, nombre, password } = req.body;
 
-  if (!email || !nombre || !password) {
+  if (!email || !nombre) {
     return res.status(400).json({
       success: false,
-      message: 'Email, nombre y password son requeridos.'
+      message: 'Email y nombre son requeridos.'
     });
   }
 
@@ -3068,9 +2821,12 @@ app.post('/api/jefes', autorizar('jefes:crear'), async (req, res) => {
 
   let userRecord;
   try {
+    const passwordManual = String(password || '').trim();
+    const passwordFinal = passwordManual || generarPasswordTemporal();
+
     userRecord = await admin.auth().createUser({
       email: String(email).trim(),
-      password,
+      password: passwordFinal,
       displayName: String(nombre).trim()
     });
 
@@ -3084,9 +2840,19 @@ app.post('/api/jefes', autorizar('jefes:crear'), async (req, res) => {
       activo: true
     });
 
+    programarEnvioCorreoAltaJefe({
+      nombre: String(nombre).trim(),
+      email: String(email).trim(),
+      password: passwordFinal
+    });
+
     res.status(201).json({
       success: true,
-      message: 'Jefe creado exitosamente.',
+      message: 'Jefe creado exitosamente. Las credenciales se muestran abajo y el correo se envia en segundo plano.',
+      credenciales_generadas: {
+        password_temporal: passwordManual ? null : passwordFinal
+      },
+      notificacion_email: NOTIFICACION_CORREO_EN_PROCESO,
       usuario: {
         uid: userRecord.uid,
         email: String(email).trim(),
@@ -3320,46 +3086,24 @@ app.delete('/api/usuarios/:uid', autorizar('usuarios:eliminar'), async (req, res
   }
 });
 
-// ==========================================
-// ENDPOINT 11: Login simulado (Para desarrollo)
-// ==========================================
-app.post('/api/auth/login', (req, res) => {
-  const modoAuth = (process.env.AUTH_MODE || 'firebase').toLowerCase();
-  if (modoAuth !== 'simulated') {
-    return res.status(403).json({
-      success: false,
-      message: 'Login simulado deshabilitado. Usa Firebase Auth en modo real.'
-    });
-  }
-
-  const { email, rol = ROLES.EMPLEADO } = req.body;
-
-  if (!email) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email requerido'
-    });
-  }
-
-  // En producción, usar Firebase Auth correctamente
-  res.json({
-    success: true,
-    message: 'Login simulado exitoso',
-    usuario: {
-      email,
-      rol,
-      nombre: rol === ROLES.ADMIN ? 'Admin' :
-        rol === ROLES.JEFE ? 'Jefe' :
-          'Empleado'
-    },
-    // En desarrollo simulado, devolver token falso
-    token: 'simulado-token-' + Date.now()
-  });
-});
-
 // Inicializar el servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor ILPEA corriendo en http://localhost:${PORT}`);
-  console.log(`Conectado a Firebase Project: ${serviceAccount.project_id}`);
+
+  verificarTransporterSMTP()
+    .then((smtp) => {
+      if (smtp.ok) {
+        console.log('📧 SMTP configurado correctamente para envio de credenciales.');
+        return;
+      }
+
+      console.warn(`⚠️ SMTP no disponible (${smtp.motivo}). Los correos de alta pueden fallar hasta corregir backend/.env`);
+      if (smtp.detalle) {
+        console.warn(`   Detalle SMTP: ${smtp.detalle}`);
+      }
+    })
+    .catch((error) => {
+      console.warn('⚠️ No se pudo verificar SMTP al arrancar:', error.message);
+    });
 });

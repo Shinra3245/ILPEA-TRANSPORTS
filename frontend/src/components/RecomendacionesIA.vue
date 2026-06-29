@@ -1,15 +1,18 @@
 <template>
   <div>
-    <div v-if="cargando" class="estado">Generando recomendaciones IA...</div>
+    <div v-if="cargando" class="estado">Cargando recomendaciones...</div>
     <div v-else-if="error" class="estado estado-error">{{ error }}</div>
+    <div v-else-if="!insights.length" class="ui-empty">Sin recomendaciones disponibles.</div>
     <div v-else class="insights-container">
       <div v-for="(item, index) in insights" :key="index" :class="['insight-card', item.prioridad]">
-      <div class="icon">💡</div>
-      <div class="content">
-        <h4>{{ item.titulo }}</h4>
-        <p>{{ item.descripcion }}</p>
-      </div>
-      <div class="tag">{{ item.prioridad.toUpperCase() }}</div>
+        <div class="icon">
+          <AppIcon name="lightbulb" :size="20" />
+        </div>
+        <div class="content">
+          <h4>{{ item.titulo }}</h4>
+          <p>{{ item.descripcion }}</p>
+        </div>
+        <div class="tag">{{ item.prioridad.toUpperCase() }}</div>
       </div>
     </div>
   </div>
@@ -18,6 +21,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useAuth } from '../composables/useAuth';
+import AppIcon from './ui/AppIcon.vue';
 
 interface Insight {
   titulo: string;
@@ -39,13 +43,13 @@ onMounted(async () => {
     const data = await res.json();
 
     if (!res.ok || !data.success) {
-      error.value = data.message || 'No se pudieron generar recomendaciones IA.';
+      error.value = data.message || 'No se pudieron cargar recomendaciones.';
       return;
     }
 
     insights.value = data.insights;
-  } catch (e) {
-    error.value = 'Error de red al consultar recomendaciones IA.';
+  } catch {
+    error.value = 'Error de conexión.';
   } finally {
     cargando.value = false;
   }
@@ -81,8 +85,16 @@ onMounted(async () => {
   background: white;
   border-left: 5px solid #ccc;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
+
+.icon {
+  display: flex;
+  align-items: center;
+  margin-right: 0.75rem;
+  color: #64748b;
+}
+
 .alta { border-left-color: #ef4444; background: #fef2f2; }
 .media { border-left-color: #f59e0b; background: #fffbeb; }
 .baja { border-left-color: #3b82f6; background: #eff6ff; }

@@ -1,34 +1,6 @@
 <template>
   <div class="admin-layout">
-    <aside class="sidebar">
-      <div class="brand">ILPEA <span>ADMIN</span></div>
-      <nav class="nav-menu">
-          <button 
-            @click="irADashboard" 
-            :class="['nav-item', { active: $route.path === '/admin' }]">
-            Dashboard
-          </button>
-          
-          <button 
-            @click="irARutasApi" 
-            :class="['nav-item', { active: $route.path === '/admin/rutas' }]">
-            Gestionar Rutas
-          </button>
-          
-          <button 
-            @click="irAUsuarios" 
-            :class="['nav-item', { active: $route.path === '/admin/usuarios' }]">
-            Usuarios
-          </button>
-
-          <button
-            @click="irAAsignaciones"
-            :class="['nav-item', { active: $route.path === '/admin/asignaciones' }]">
-            Asignaciones
-          </button>
-        </nav>
-      <button @click="cerrarSesion" class="logout-btn">Cerrar Sesión</button>
-    </aside>
+    <AdminSidebar />
 
     <main class="main-content">
       <header class="content-header">
@@ -38,32 +10,38 @@
             <p>Aforo mínimo para justificar ruta: <strong>40%</strong></p>
           </div>
           <div class="button-group">
-            <button 
-              @click="exportarTablaExcel" 
-              :disabled="cargando || exportandoExcel || !!error" 
-              class="btn-exportar excel-btn"
+            <button
+              @click="exportarTablaExcel"
+              :disabled="cargando || exportandoExcel || !!error"
+              class="btn-exportar excel-btn btn-with-icon"
             >
-              {{ exportandoExcel ? '⏳ Generando Programación...' : '📊 Exportar Programación Rutas' }}
+              <AppIcon v-if="exportandoExcel" name="loader-2" :size="16" spin />
+              <AppIcon v-else name="file-spreadsheet" :size="16" />
+              <span>{{ exportandoExcel ? 'Exportando...' : 'Exportar programación' }}</span>
             </button>
 
-            <button 
-              @click="exportarAsignacionesExcel" 
-              :disabled="cargando || exportandoAsignaciones || !!error" 
-              class="btn-exportar assignments-btn"
+            <button
+              @click="exportarAsignacionesExcel"
+              :disabled="cargando || exportandoAsignaciones || !!error"
+              class="btn-exportar assignments-btn btn-with-icon"
             >
-              {{ exportandoAsignaciones ? '⏳ Generando Catálogo...' : '📋 Exportar Catálogo Asignaciones' }}
+              <AppIcon v-if="exportandoAsignaciones" name="loader-2" :size="16" spin />
+              <AppIcon v-else name="clipboard-list" :size="16" />
+              <span>{{ exportandoAsignaciones ? 'Exportando...' : 'Exportar asignaciones' }}</span>
             </button>
           </div>
         </div>
       </header>
 
-      <div v-if="cargando" class="status-box">Sincronizando con Backend...</div>
-      <div v-else-if="error" class="status-box error-msg">
-        <p>⚠️ {{ error }}</p>
-        <button @click="recargarRutasSegunFiltro" class="btn-retry">Reintentar Conexión</button>
+      <div v-if="error" class="status-box error-msg">
+        <p class="ui-alert ui-alert--error">
+          <AppIcon name="alert-triangle" :size="18" />
+          <span>{{ error }}</span>
+        </p>
+        <button @click="recargarRutasSegunFiltro" class="btn-retry">Reintentar</button>
       </div>
-
       <div v-else class="dashboard-visuals">
+        <div v-if="cargando" class="status-box">Cargando rutas...</div>
         <div class="charts-filter">
           <label for="chart-select">Visualización:</label>
           <select id="chart-select" v-model="selectedChart" class="minimal-select">
@@ -134,13 +112,23 @@
         </div>
 
         <section class="ia-block">
-          <h3 class="section-title">Recomendaciones IA</h3>
-          <RecomendacionesIA />
+          <div class="section-header-inline">
+            <h3 class="section-title">Recomendaciones</h3>
+            <button
+              class="btn-manage"
+              @click="activarInsights"
+              :disabled="cargandoInsights || mostrarInsights"
+            >
+              {{ cargandoInsights ? 'Cargando...' : (mostrarInsights ? 'Cargadas' : 'Cargar') }}
+            </button>
+          </div>
+          <RecomendacionesIA v-if="mostrarInsights" />
+          <p v-else class="ui-empty">Pulse «Cargar» para ver recomendaciones.</p>
         </section>
 
         <section class="ia-block">
           <div class="section-header-inline">
-            <h3 class="section-title">Planes IA Ejecutados Recientes</h3>
+            <h3 class="section-title">Planes recientes</h3>
             <button
               class="btn-manage"
               @click="obtenerPlanesIA"
@@ -150,9 +138,9 @@
             </button>
           </div>
 
-          <div v-if="cargandoPlanes" class="status-box">Cargando planes IA...</div>
+          <div v-if="cargandoPlanes" class="status-box">Cargando...</div>
           <div v-else-if="errorPlanes" class="status-box error-msg">{{ errorPlanes }}</div>
-          <div v-else-if="!planesIA.length" class="status-box">No hay planes IA ejecutados para mostrar.</div>
+          <div v-else-if="!planesIA.length" class="ui-empty">Sin planes recientes.</div>
 
           <div v-else class="planes-grid">
             <article v-for="plan in planesIA" :key="plan.id" class="plan-card">
@@ -177,7 +165,7 @@
                   <th>Unidad</th>
                   <th>Capacidad</th>
                   <th>Ocupación %</th>
-                  <th>Estado IA</th>
+                  <th>Estado</th>
                   <th class="no-print">Acción</th> 
                 </tr>
               </thead>
@@ -223,11 +211,10 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue';
 import { useAuth } from '../composables/useAuth';
-import { useRouter } from 'vue-router';
-// Importamos ExcelJS y FileSaver
-import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 
+import AdminSidebar from '../components/layout/AdminSidebar.vue';
+import AppIcon from '../components/ui/AppIcon.vue';
 import RecomendacionesIA from '../components/RecomendacionesIA.vue';
 import ChartOcupacion from '../components/ChartOcupacion.vue';
 import ChartCapacidad from '../components/ChartCapacidad.vue';
@@ -289,11 +276,12 @@ const cargando = ref(true);
 const error = ref<string | null>(null);
 const { authHeaders } = useAuth();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
-const router = useRouter();
 const selectedChart = ref<string>('todos');
 const planesIA = ref<PlanIA[]>([]);
 const cargandoPlanes = ref(false);
 const errorPlanes = ref<string | null>(null);
+const mostrarInsights = ref(false);
+const cargandoInsights = ref(false);
 const filtroPeriodo = ref<'todos' | 'dia' | 'semana'>('todos');
 const filtroDia = ref(new Date().toISOString().slice(0, 10));
 const filtroSemana = ref<number>(1);
@@ -487,12 +475,26 @@ const obtenerPlanesIA = async () => {
   }
 };
 
+const activarInsights = () => {
+  if (mostrarInsights.value) {
+    return;
+  }
+
+  cargandoInsights.value = true;
+  mostrarInsights.value = true;
+  // Esperar siguiente ciclo para evitar bloqueo perceptible al montar el componente pesado.
+  requestAnimationFrame(() => {
+    cargandoInsights.value = false;
+  });
+};
+
 // --- EXPORTACIONES (ExcelJS) ---
 
 // Función 1: Exportar Programación Operativa (Rutas)
 const exportarTablaExcel = async () => {
   exportandoExcel.value = true;
   try {
+    const { default: ExcelJS } = await import('exceljs');
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Programación de Rutas');
 
@@ -575,6 +577,7 @@ const exportarAsignacionesExcel = async () => {
   exportandoAsignaciones.value = true;
   
   try {
+    const { default: ExcelJS } = await import('exceljs');
     // 1. Consultar datos al Backend (Asumiendo endpoint en Frente 2/OCI)
     const headers = await authHeaders();
     // NOTA OPERATIVA: Asegúrate de tener este endpoint '/api/usuarios-asignados' configurado en tu backend
@@ -696,18 +699,6 @@ const exportarAsignacionesExcel = async () => {
   }
 };
 
-// --- NAVEGACIÓN ---
-const irADashboard = () => router.push('/admin');
-const irARutasApi = () => router.push('/admin/rutas');
-const irAUsuarios = () => router.push('/admin/usuarios');
-const irAAsignaciones = () => router.push('/admin/asignaciones');
-
-const cerrarSesion = async () => {
-  const { logout } = useAuth();
-  await logout();
-  router.push('/login');
-};
-
 // --- CICLO DE VIDA ---
 onMounted(() => {
   obtenerRutas();
@@ -718,14 +709,6 @@ onMounted(() => {
 <style scoped>
 /* Estilos existentes intactos */
 .admin-layout { display: flex; min-height: 100vh; background: #f8f9fa; font-family: 'Inter', system-ui, sans-serif; color: #1a1a1a; }
-.sidebar { width: 240px; background: #000; color: #fff; padding: 2rem 1.5rem; display: flex; flex-direction: column; }
-.brand { font-weight: 800; font-size: 1.2rem; margin-bottom: 3rem; }
-.brand span { color: #666; font-weight: 400; }
-.nav-menu { display: flex; flex-direction: column; gap: 5px; margin-bottom: 2rem; }
-.nav-item { display: block; width: 100%; background: none; border: none; color: #888; text-align: left; padding: 0.8rem 0; cursor: pointer; transition: 0.2s; font-size: 0.9rem; }
-.nav-item.active, .nav-item:hover { color: #fff; }
-.logout-btn { background: #ef4444; color: #ffffff; padding: 0.8rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 700; transition: background 0.3s; width: 100%;}
-.logout-btn:hover { background: #dc2626; }
 .main-content { flex: 1; padding: 3rem; }
 .header-flex { display: flex; justify-content: space-between; align-items: flex-start; }
 .content-header { margin-bottom: 2rem; }
@@ -793,10 +776,6 @@ onMounted(() => {
 /* RESPONSIVIDAD PARA MÓVILES Y TABLETS */
 @media (max-width: 768px) {
   .admin-layout { flex-direction: column; }
-  .sidebar { width: 100%; padding: 1.5rem; flex-direction: column; align-items: center; }
-  .brand { margin-bottom: 1.5rem; }
-  .nav-menu { width: 100%; align-items: stretch; }
-  .nav-item { text-align: center; }
   .main-content { padding: 1.5rem 1rem; }
   
   .header-flex { flex-direction: column; gap: 1.5rem; align-items: stretch; }

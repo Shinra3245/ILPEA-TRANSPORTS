@@ -3,7 +3,6 @@
     <div class="panel-header">
       <div>
         <h3>Gestión de Jefes</h3>
-        <p>Crear, editar, listar y eliminar jefes. Los jefes pueden gestionar empleados asignados.</p>
       </div>
       <button class="btn-secondary" type="button" :disabled="cargando" @click="cargarJefes">
         {{ cargando ? 'Cargando...' : 'Actualizar' }}
@@ -25,14 +24,18 @@
         </label>
 
         <label>
-          Contraseña {{ editandoUid ? '(opcional)' : '' }}
+          Contraseña {{ editandoUid ? '(opcional)' : '(opcional)' }}
           <input
             v-model="form.password"
             type="password"
-            :placeholder="editandoUid ? 'Dejar vacío para no cambiar' : 'Contraseña temporal'"
-            :required="!editandoUid"
+            :placeholder="editandoUid ? 'Dejar vacío para no cambiar' : 'Se genera y envía por correo si se deja vacío'"
+            :required="false"
           />
         </label>
+
+        <p v-if="!editandoUid" class="helper-note">
+          Contraseña opcional; se envía por correo si se omite.
+        </p>
 
         <label v-if="editandoUid" class="checkbox-row">
           <input v-model="form.activo" type="checkbox" />
@@ -49,7 +52,16 @@
         </div>
 
         <p v-if="mensaje" class="msg-success">{{ mensaje }}</p>
+        <p v-if="avisoCorreo" :class="correoEnviado ? 'msg-success' : 'msg-warning'">{{ avisoCorreo }}</p>
         <p v-if="error" class="msg-error">{{ error }}</p>
+
+        <div v-if="credencialesGeneradas" class="generated-credentials">
+          <h5>Credenciales generadas</h5>
+          <p v-if="credencialesGeneradas.password_temporal">
+            <strong>Contraseña temporal:</strong> {{ credencialesGeneradas.password_temporal }}
+          </p>
+          <p class="helper-note">Guárdala ahora. La contraseña solo se muestra una vez.</p>
+        </div>
       </form>
 
       <div class="table-card">
@@ -111,6 +123,17 @@ interface Jefe {
   activo?: boolean;
 }
 
+interface CredencialesGeneradas {
+  password_temporal?: string | null;
+}
+
+interface NotificacionEmail {
+  enviado?: boolean;
+  motivo?: string | null;
+  detalle?: string | null;
+  destinatario?: string | null;
+}
+
 const { authHeaders } = useAuth();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
@@ -119,6 +142,9 @@ const cargando = ref(false);
 const guardando = ref(false);
 const error = ref<string | null>(null);
 const mensaje = ref<string | null>(null);
+const avisoCorreo = ref<string | null>(null);
+const correoEnviado = ref(false);
+const credencialesGeneradas = ref<CredencialesGeneradas | null>(null);
 const editandoUid = ref<string | null>(null);
 
 const form = reactive({
@@ -130,10 +156,36 @@ const form = reactive({
 
 function limpiarFormulario() {
   editandoUid.value = null;
+  credencialesGeneradas.value = null;
+  avisoCorreo.value = null;
+  correoEnviado.value = false;
   form.nombre = '';
   form.email = '';
   form.password = '';
   form.activo = true;
+}
+
+function actualizarEstadoCorreo(notificacion?: NotificacionEmail | null) {
+  if (!notificacion) {
+    avisoCorreo.value = null;
+    correoEnviado.value = false;
+    return;
+  }
+
+  if (notificacion.motivo === 'ENVIO_EN_PROCESO') {
+    correoEnviado.value = true;
+    avisoCorreo.value = 'Enviando credenciales por correo…';
+    return;
+  }
+
+  correoEnviado.value = Boolean(notificacion.enviado);
+  if (notificacion.enviado) {
+    avisoCorreo.value = `Correo enviado a ${notificacion.destinatario || 'destinatario'}.`;
+    return;
+  }
+
+  const detalle = notificacion.detalle ? ` ${notificacion.detalle}` : '';
+  avisoCorreo.value = `No se pudo enviar el correo (${notificacion.motivo || 'DESCONOCIDO'}).${detalle}`;
 }
 
 async function obtenerHeaders() {
@@ -175,6 +227,9 @@ function editarJefe(jefe: Jefe) {
   form.email = jefe.email;
   form.password = '';
   form.activo = jefe.activo !== false;
+  credencialesGeneradas.value = null;
+  avisoCorreo.value = null;
+  correoEnviado.value = false;
   mensaje.value = null;
   error.value = null;
 }
@@ -183,20 +238,27 @@ async function guardarJefe() {
   guardando.value = true;
   error.value = null;
   mensaje.value = null;
+  avisoCorreo.value = null;
+  correoEnviado.value = false;
 
   try {
     const esEdicion = Boolean(editandoUid.value);
+    const body: Record<string, unknown> = {
+      nombre: form.nombre,
+      email: form.email,
+      activo: form.activo,
+    };
+
+    if (form.password.trim()) {
+      body.password = form.password;
+    }
+
     const response = await fetch(
       esEdicion ? `${API_BASE_URL}/api/jefes/${editandoUid.value}` : `${API_BASE_URL}/api/jefes`,
       {
         method: esEdicion ? 'PUT' : 'POST',
         headers: await obtenerHeaders(),
-        body: JSON.stringify({
-          nombre: form.nombre,
-          email: form.email,
-          password: form.password,
-          activo: form.activo,
-        }),
+        body: JSON.stringify(body),
       }
     );
 
@@ -206,6 +268,20 @@ async function guardarJefe() {
     }
 
     mensaje.value = payload?.message || (esEdicion ? 'Jefe actualizado.' : 'Jefe creado.');
+
+    if (!esEdicion) {
+      credencialesGeneradas.value = {
+        password_temporal: payload?.credenciales_generadas?.password_temporal || null,
+      };
+      actualizarEstadoCorreo(payload?.notificacion_email as NotificacionEmail | undefined);
+      form.nombre = '';
+      form.email = '';
+      form.password = '';
+      form.activo = true;
+      await cargarJefes();
+      return;
+    }
+
     limpiarFormulario();
     await cargarJefes();
   } catch (err: any) {
@@ -411,6 +487,42 @@ onMounted(() => {
   border-left: 3px solid #dc2626;
   border-radius: 4px;
   font-size: 0.9rem;
+}
+
+.msg-warning {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: #fffbeb;
+  color: #92400e;
+  border-left: 3px solid #f59e0b;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.generated-credentials {
+  margin-top: 1rem;
+  padding: 0.9rem;
+  border-radius: 4px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+}
+
+.generated-credentials h5 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.95rem;
+  color: #312e81;
+}
+
+.generated-credentials p {
+  margin: 0.2rem 0;
+  color: #1e1b4b;
+  font-size: 0.9rem;
+}
+
+.helper-note {
+  margin-top: 0.6rem;
+  color: #666;
+  font-size: 0.85rem;
 }
 
 .table-card {

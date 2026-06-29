@@ -1,12 +1,20 @@
 <template>
   <div class="chart-container">
-    <h3>📊 Capacidad Real vs Ocupación Máxima</h3>
-    <Bar :data="chartData" :options="chartOptions" />
+    <h3 class="title-with-icon">
+      <AppIcon name="bar-chart-3" :size="20" />
+      <span>Capacidad vs ocupación</span>
+    </h3>
+    <div class="chart-scroll">
+      <div class="chart-canvas-wrapper" :style="{ minWidth: chartMinWidth }">
+        <Bar :data="chartData" :options="chartOptions" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import AppIcon from './ui/AppIcon.vue';
 import { Bar } from 'vue-chartjs';
 import {
   Chart as ChartJS,
@@ -42,6 +50,10 @@ interface Props {
 
 const props = defineProps<Props>();
 
+// 70px por ruta asegura espacio suficiente para 2 barras + etiqueta sin solaparse,
+// sin importar si el contenedor (card de 3 columnas en escritorio o pantalla móvil) es angosto.
+const chartMinWidth = computed(() => `${Math.max(props.rutas.length * 70, 480)}px`);
+
 const chartData = computed(() => ({
   labels: props.rutas.map(r => `Ruta ${r.ruta}`),
   datasets: [
@@ -62,9 +74,9 @@ const chartData = computed(() => ({
   ]
 }));
 
-const chartOptions = {
+const chartOptions = computed(() => ({
   responsive: true,
-  maintainAspectRatio: true,
+  maintainAspectRatio: false,
   plugins: {
     legend: {
       display: true,
@@ -85,6 +97,13 @@ const chartOptions = {
     }
   },
   scales: {
+    x: {
+      ticks: {
+        autoSkip: false,
+        maxRotation: 0,
+        minRotation: 0
+      }
+    },
     y: {
       beginAtZero: true,
       ticks: {
@@ -92,7 +111,7 @@ const chartOptions = {
       }
     }
   }
-};
+}));
 </script>
 
 <style scoped>
@@ -108,5 +127,21 @@ const chartOptions = {
   margin-top: 0;
   color: #1e293b;
   font-size: 1.1rem;
+}
+
+.chart-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chart-canvas-wrapper {
+  position: relative;
+  height: 320px;
+}
+
+@media (max-width: 768px) {
+  .chart-canvas-wrapper {
+    height: 260px;
+  }
 }
 </style>

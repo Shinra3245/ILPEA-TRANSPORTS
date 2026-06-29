@@ -1,5 +1,8 @@
 <template>
-  <div class="jefe-container">
+  <div :class="esAdmin ? 'admin-layout' : ''">
+    <AdminSidebar v-if="esAdmin" />
+
+    <div class="jefe-container" :class="{ 'with-sidebar': esAdmin }">
     <header class="header">
       <div class="header-left">
         <button
@@ -10,7 +13,7 @@
           aria-label="Volver al dashboard"
           title="Volver al dashboard"
         >
-          ←
+          <AppIcon name="chevron-left" :size="18" />
         </button>
         <div class="brand">ILPEA <span>LOGÍSTICA</span></div>
       </div>
@@ -20,7 +23,7 @@
       </div>
     </header>
 
-    <main class="dashboard-grid">
+    <main class="dashboard-grid" ref="seccionAsignacion">
       <section class="bus-section">
         <div class="section-card">
           <div class="bus-header">
@@ -33,7 +36,10 @@
           </div>
 
           <div class="bus-chassis">
-            <div class="driver-seat">💺 Piloto</div>
+            <div class="driver-seat">
+              <AppIcon name="circle-user" :size="14" />
+              <span>Piloto</span>
+            </div>
             <div class="seats-grid">
               <div 
                 v-for="n in (rutaSeleccionada?.capacidad_real || 30)" 
@@ -76,8 +82,11 @@
               </option>
             </select>
             <p v-if="empleadoSeleccionado" class="helper-note">{{ empleadoSeleccionado.email }}</p>
-            <p v-if="empleadoYaAsignado" class="status-error" style="margin-top: 0.5rem; font-size: 0.85rem;">
-              ⚠️ Este empleado ya está asignado a la Ruta {{ empleadoYaAsignado.ruta.ruta }} (Asiento {{ empleadoYaAsignado.asiento }}). Debes desasignarlo en la tabla inferior primero.
+            <p v-if="empleadoYaAsignado" class="status-error ui-alert-inline">
+              <AppIcon name="alert-triangle" :size="14" />
+              <span>
+                Este empleado ya está asignado a la Ruta {{ empleadoYaAsignado.ruta.ruta }} (Asiento {{ empleadoYaAsignado.asiento }}). Desasígnalo en la tabla inferior primero.
+              </span>
             </p>
           </div>
 
@@ -228,6 +237,7 @@
     </section>
 
     <CopilotoChat :scope="scopeChat" :contexto="{ fecha: registro.dia, turno: registro.horario }" />
+    </div>
   </div>
 </template>
 
@@ -237,6 +247,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue'
 import CopilotoChat from '../components/CopilotoChat.vue'
+import AppIcon from '../components/ui/AppIcon.vue'
+import AdminSidebar from '../components/layout/AdminSidebar.vue'
 
 interface EmpleadoAsignado {
   uid: string;
@@ -298,8 +310,8 @@ const mostrarBotonVolverDashboard = computed(() => esAdmin.value && route.path =
 const tituloPanel = computed(() => (esAdmin.value ? 'Panel de Asignación: Administrador' : 'Panel de Asignación: Jefe de Turno'))
 const subtituloPanel = computed(() => (
   esAdmin.value
-    ? 'Selecciona un asiento y asigna empleados con acceso total a todas las rutas.'
-    : 'Selecciona un asiento y asigna solo empleados bajo tu responsabilidad'
+    ? 'Asigna empleados a rutas y asientos.'
+    : 'Asigna empleados de tu equipo.'
 ))
 const scopeChat = computed(() => (esAdmin.value ? 'ADMIN' : 'JEFE'))
 
@@ -735,12 +747,15 @@ const confirmarDesasignacion = async () => {
   }
 }
 
+const seccionAsignacion = ref<HTMLElement | null>(null)
+
 function prepararCambioRutaDesdeTabla(idEmpleado: string, rutaId: string | null) {
   registro.value.idEmpleado = idEmpleado
   registro.value.ruta = rutaId || rutaRecomendada.value?.id || rutasParaTurno.value[0]?.id || ''
   registro.value.asiento = null
   mensaje.value = `Empleado ${idEmpleado} seleccionado. Elige asiento para confirmar la asignación.`
   error.value = null
+  seccionAsignacion.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 async function liberarAsignacionDesdeTabla(fila: FilaEmpleadoAsignacion) {
@@ -839,7 +854,13 @@ onMounted(cargarContextoInicial)
 
 <style scoped>
 /* ESTILOS RESTAURADOS - ILPEA CLEAN TECH */
+.admin-layout { display: flex; min-height: 100vh; }
 .jefe-container { min-height: 100vh; background: #f8fafc; font-family: 'Inter', sans-serif; color: #1e293b; }
+.jefe-container.with-sidebar { flex: 1; min-width: 0; }
+
+@media (max-width: 768px) {
+  .admin-layout { flex-direction: column; }
+}
 .header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 3rem; background: #fff; border-bottom: 1px solid #e2e8f0; }
 .header-left { display: flex; align-items: center; gap: 0.75rem; }
 .brand { font-weight: 800; font-size: 1.2rem; }
@@ -878,7 +899,25 @@ onMounted(cargarContextoInicial)
 .occupied { background: #94a3b8; }
 
 .bus-chassis { background: #f1f5f9; padding: 25px; border-radius: 30px 30px 10px 10px; max-width: 380px; margin: 0 auto; border: 2px solid #e2e8f0; }
-.driver-seat { text-align: right; margin-bottom: 25px; font-size: 0.8rem; font-weight: 700; color: #94a3b8; padding-right: 15px; }
+.driver-seat {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-bottom: 25px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #94a3b8;
+  padding-right: 15px;
+}
+
+.ui-alert-inline {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
 
 .seats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .seat-wrapper { display: flex; justify-content: center; }
