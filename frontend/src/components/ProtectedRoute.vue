@@ -4,13 +4,10 @@
   </div>
   <div v-else class="no-permission">
     <div class="alert">
-      <h2>❌ Acceso Denegado</h2>
-      <p>No tienes permisos para acceder a este contenido.</p>
-      <p class="info">Tu rol: <strong>{{ rol }}</strong></p>
-      <p v-if="rolesRequeridos" class="info">
-        Roles permitidos: <strong>{{ rolesRequeridos.join(', ') }}</strong>
-      </p>
-      <button @click="irAlInicio" class="btn-volver">Volver al Inicio</button>
+      <AppIcon name="shield-x" :size="32" icon-class="alert-icon" />
+      <h2>Acceso restringido</h2>
+      <p>Tu rol no tiene permiso para ver este contenido.</p>
+      <button type="button" @click="irAlInicio" class="btn-volver">Volver al inicio</button>
     </div>
   </div>
 </template>
@@ -19,6 +16,7 @@
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuth } from '../composables/useAuth';
+import AppIcon from './ui/AppIcon.vue';
 
 interface Props {
   requiereRol?: string | string[];
@@ -31,34 +29,17 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const router = useRouter();
-const { tieneRol, tienePermiso: verificarPermiso, obtenerRol } = useAuth();
-
-const rol = computed(() => obtenerRol());
-
-const rolesRequeridos = computed(() => {
-  if (!props.requiereRol) return null;
-  return Array.isArray(props.requiereRol) ? props.requiereRol : [props.requiereRol];
-});
-
-const permisosRequeridos = computed(() => {
-  if (!props.requierePermiso) return null;
-  return Array.isArray(props.requierePermiso)
-    ? props.requierePermiso
-    : [props.requierePermiso];
-});
+const { tieneRol, tienePermiso: verificarPermiso } = useAuth();
 
 const tienePermiso = computed(() => {
-  // Si no hay requisitos, permitir acceso
   if (!props.requiereRol && !props.requierePermiso) {
     return true;
   }
 
-  // Verificar roles
   if (props.requiereRol) {
     return tieneRol(props.requiereRol);
   }
 
-  // Verificar permisos
   if (props.requierePermiso) {
     const permisos = Array.isArray(props.requierePermiso)
       ? props.requierePermiso
@@ -96,25 +77,20 @@ const irAlInicio = () => {
   max-width: 500px;
 }
 
+.alert-icon {
+  color: #dc2626;
+  margin-bottom: 0.75rem;
+}
+
 .alert h2 {
   color: #dc2626;
   margin: 0 0 1rem 0;
+  font-size: 1.25rem;
 }
 
 .alert p {
   color: #991b1b;
   margin: 0.5rem 0;
-}
-
-.info {
-  background-color: #fef2f2;
-  padding: 0.75rem;
-  border-radius: 4px;
-  margin-top: 1rem;
-}
-
-.info strong {
-  color: #7c2d12;
 }
 
 .btn-volver {
@@ -125,7 +101,7 @@ const irAlInicio = () => {
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-weight: bold;
+  font-weight: 600;
   transition: background-color 0.2s;
 }
 

@@ -1,21 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import Login from '../views/Login.vue'
-import AdminDashboard from '../views/AdminDashboard.vue'
-import AdminUsers from '../views/AdminUsers.vue'
-import PanelJefe from '../views/PanelJefe.vue'
-import EmpleadoDashboard from '../views/EmpleadoDashboard.vue'
-import GestionRutas from '../views/GestionRutas.vue';
 import { useAuth } from '../composables/useAuth'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/login' },
-    { path: '/login', name: 'Login', component: Login },
+    { path: '/login', name: 'Login', component: () => import('../views/Login.vue') },
     { 
       path: '/admin', 
       name: 'Admin', 
-      component: AdminDashboard,
+      component: () => import('../views/AdminDashboard.vue'),
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
@@ -23,7 +17,7 @@ const router = createRouter({
     {
       path: '/admin/rutas',
       name: 'GestionRutas',
-      component: GestionRutas,
+      component: () => import('../views/GestionRutas.vue'),
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
@@ -31,27 +25,27 @@ const router = createRouter({
     {
       path: '/admin/usuarios',
       name: 'AdminUsers',
-      component: AdminUsers,
+      component: () => import('../views/AdminUsers.vue'),
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
     {
       path: '/admin/asignaciones',
       name: 'AdminAsignaciones',
-      component: PanelJefe,
+      component: () => import('../views/PanelJefe.vue'),
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
     { 
       path: '/jefe', 
       name: 'Jefe', 
-      component: PanelJefe,
+      component: () => import('../views/PanelJefe.vue'),
       meta: { requiresAuth: true, role: 'JEFE' }
     },
     {
       path: '/empleado',
       name: 'Empleado',
-      component: EmpleadoDashboard,
+      component: () => import('../views/EmpleadoDashboard.vue'),
       meta: { requiresAuth: true, role: 'EMPLEADO' }
     }
   ]

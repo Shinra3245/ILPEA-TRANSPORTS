@@ -3,7 +3,6 @@
     <div class="dashboard-container">
       <header class="header">
         <h1>ILPEA | Panel del Empleado</h1>
-        <p>Consulta y gestiona tu asiento asignado</p>
         <div class="usuario-info">
           <span>Bienvenido, {{ obtenerNombre() }}</span>
           <button @click="handleLogout" class="btn-logout">Cerrar Sesión</button>
@@ -56,8 +55,7 @@
             </div>
 
             <div v-else class="no-data">
-              <p>No tienes una asignación activa.</p>
-              <p>Contacta a tu Jefe de Turno para una nueva asignación.</p>
+              <p>No tienes una asignación activa. Contacta a tu jefe de turno.</p>
             </div>
           </section>
         </ProtectedRoute>

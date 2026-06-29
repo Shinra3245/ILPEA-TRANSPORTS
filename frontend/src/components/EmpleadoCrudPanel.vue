@@ -3,7 +3,6 @@
     <div class="panel-header">
       <div>
         <h3>Gestión de Empleados</h3>
-        <p>Crear, editar, listar y eliminar empleados. El admin asigna el jefe responsable y el jefe solo ve los suyos.</p>
       </div>
       <button class="btn-secondary" type="button" :disabled="cargando" @click="cargarEmpleados">
         {{ cargando ? 'Cargando...' : 'Actualizar' }}
@@ -18,10 +17,6 @@
           ID Empleado
           <input v-model.trim="form.id_empleado" type="text" placeholder="Ej. 2496" required />
         </label>
-
-        <p v-else class="helper-note">
-          El ID de empleado y la contraseña temporal se generan automáticamente al crear el registro.
-        </p>
 
         <label>
           Nombre
@@ -43,7 +38,9 @@
           </select>
         </label>
 
-        <p v-else class="helper-note">Los empleados creados desde este panel quedan asignados a tu usuario.</p>
+        <p v-if="!editandoUid && esAdmin" class="helper-note">
+          Selecciona el jefe responsable.
+        </p>
 
         <label v-if="editandoUid">
           Contraseña (opcional)
@@ -70,6 +67,7 @@
         </div>
 
         <p v-if="mensaje" class="msg-success">{{ mensaje }}</p>
+        <p v-if="avisoCorreo" :class="correoEnviado ? 'msg-success' : 'msg-warning'">{{ avisoCorreo }}</p>
         <p v-if="error" class="msg-error">{{ error }}</p>
 
         <div v-if="credencialesGeneradas" class="generated-credentials">
@@ -94,41 +92,43 @@
           No hay empleados registrados.
         </div>
 
-        <table v-else class="table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Nombre</th>
-              <th>Email</th>
-              <th>Jefe</th>
-              <th>Estado</th>
-              <th>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="empleado in empleados" :key="empleado.uid">
-              <td>{{ obtenerIdVisual(empleado) }}</td>
-              <td>
-                <strong>{{ empleado.nombre }}</strong>
-              </td>
-              <td>{{ empleado.email }}</td>
-              <td>{{ nombreJefe(empleado.jefe_uid) }}</td>
-              <td>
-                <span :class="['badge', empleado.activo ? 'badge-ok' : 'badge-off']">
-                  {{ empleado.activo ? 'Activo' : 'Inactivo' }}
-                </span>
-              </td>
-              <td class="actions-cell">
-                <button class="btn-mini" type="button" @click="editarEmpleado(empleado)">
-                  Editar
-                </button>
-                <button class="btn-mini danger" type="button" @click="eliminarEmpleado(empleado)">
-                  Eliminar
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div v-else class="table-scroll">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Email</th>
+                <th>Jefe</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="empleado in empleados" :key="empleado.uid">
+                <td>{{ obtenerIdVisual(empleado) }}</td>
+                <td>
+                  <strong>{{ empleado.nombre }}</strong>
+                </td>
+                <td>{{ empleado.email }}</td>
+                <td>{{ nombreJefe(empleado.jefe_uid) }}</td>
+                <td>
+                  <span :class="['badge', empleado.activo ? 'badge-ok' : 'badge-off']">
+                    {{ empleado.activo ? 'Activo' : 'Inactivo' }}
+                  </span>
+                </td>
+                <td class="actions-cell">
+                  <button class="btn-mini" type="button" @click="editarEmpleado(empleado)">
+                    Editar
+                  </button>
+                  <button class="btn-mini danger" type="button" @click="eliminarEmpleado(empleado)">
+                    Eliminar
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </section>
@@ -158,6 +158,13 @@ interface CredencialesGeneradas {
   password_temporal?: string | null;
 }
 
+interface NotificacionEmail {
+  enviado?: boolean;
+  motivo?: string | null;
+  detalle?: string | null;
+  destinatario?: string | null;
+}
+
 const { authHeaders, obtenerRol, usuario } = useAuth();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const usuarioActual = computed(() => usuario.value);
@@ -172,6 +179,8 @@ const cargando = ref(false);
 const guardando = ref(false);
 const error = ref<string | null>(null);
 const mensaje = ref<string | null>(null);
+const avisoCorreo = ref<string | null>(null);
+const correoEnviado = ref(false);
 const editandoUid = ref<string | null>(null);
 const credencialesGeneradas = ref<CredencialesGeneradas | null>(null);
 
@@ -194,12 +203,37 @@ function upsertEmpleadoEnTabla(empleado: Empleado) {
 function limpiarFormulario() {
   editandoUid.value = null;
   credencialesGeneradas.value = null;
+  avisoCorreo.value = null;
+  correoEnviado.value = false;
   form.id_empleado = '';
   form.nombre = '';
   form.email = '';
   form.password = '';
   form.activo = true;
   form.jefe_uid = esAdmin.value ? '' : uidUsuarioActual.value;
+}
+
+function actualizarEstadoCorreo(notificacion?: NotificacionEmail | null) {
+  if (!notificacion) {
+    avisoCorreo.value = null;
+    correoEnviado.value = false;
+    return;
+  }
+
+  if (notificacion.motivo === 'ENVIO_EN_PROCESO') {
+    correoEnviado.value = true;
+    avisoCorreo.value = 'Enviando credenciales por correo…';
+    return;
+  }
+
+  correoEnviado.value = Boolean(notificacion.enviado);
+  if (notificacion.enviado) {
+    avisoCorreo.value = `Correo enviado a ${notificacion.destinatario || 'destinatario'}.`;
+    return;
+  }
+
+  const detalle = notificacion.detalle ? ` ${notificacion.detalle}` : '';
+  avisoCorreo.value = `No se pudo enviar el correo (${notificacion.motivo || 'DESCONOCIDO'}).${detalle}`;
 }
 
 async function obtenerHeaders() {
@@ -282,6 +316,8 @@ function editarEmpleado(empleado: Empleado) {
   form.password = '';
   form.activo = empleado.activo !== false;
   form.jefe_uid = empleado.jefe_uid || (esAdmin.value ? '' : uidUsuarioActual.value);
+  avisoCorreo.value = null;
+  correoEnviado.value = false;
   mensaje.value = null;
   error.value = null;
 }
@@ -305,6 +341,8 @@ async function guardarEmpleado() {
   guardando.value = true;
   error.value = null;
   mensaje.value = null;
+  avisoCorreo.value = null;
+  correoEnviado.value = false;
 
   try {
     if (!esAdmin.value && !uidUsuarioActual.value) {
@@ -350,6 +388,7 @@ async function guardarEmpleado() {
         id_empleado: payload?.credenciales_generadas?.id_empleado || idGenerado || '',
         password_temporal: payload?.credenciales_generadas?.password_temporal || passwordGenerada,
       };
+      actualizarEstadoCorreo(payload?.notificacion_email as NotificacionEmail | undefined);
     }
 
     mensaje.value = payload?.message || (esEdicion ? 'Empleado actualizado.' : 'Empleado creado.');
@@ -460,7 +499,7 @@ onMounted(async () => {
 
 .panel-grid {
   display: grid;
-  grid-template-columns: 1fr 1.5fr;
+  grid-template-columns: minmax(280px, 340px) 1fr;
   gap: 2rem;
 }
 
@@ -575,6 +614,16 @@ onMounted(async () => {
   font-size: 0.9rem;
 }
 
+.msg-warning {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: #fffbeb;
+  color: #92400e;
+  border-left: 3px solid #f59e0b;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
 .generated-credentials {
   margin-top: 1rem;
   padding: 0.9rem;
@@ -637,10 +686,16 @@ onMounted(async () => {
   font-size: 0.95rem;
 }
 
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .table {
   width: 100%;
+  min-width: 640px;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 
 .table thead {
@@ -648,7 +703,7 @@ onMounted(async () => {
 }
 
 .table th {
-  padding: 1rem 1.5rem;
+  padding: 0.9rem 0.9rem;
   text-align: left;
   font-weight: 600;
   color: #333;
@@ -656,9 +711,21 @@ onMounted(async () => {
 }
 
 .table td {
-  padding: 1rem 1.5rem;
+  padding: 0.9rem 0.9rem;
   border-bottom: 1px solid #f5f5f5;
   color: #333;
+}
+
+.table th:first-child,
+.table td:first-child {
+  white-space: nowrap;
+}
+
+.table td:nth-child(3) {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table tbody tr:hover {
@@ -667,18 +734,19 @@ onMounted(async () => {
 
 .actions-cell {
   display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .btn-mini {
-  padding: 0.5rem 0.8rem;
+  padding: 0.45rem 0.65rem;
   background: #f5f5f5;
   color: #333;
   border: 1px solid #ddd;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 500;
   transition: all 0.2s;
 }

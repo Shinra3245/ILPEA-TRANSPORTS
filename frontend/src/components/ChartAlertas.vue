@@ -1,12 +1,16 @@
 <template>
   <div class="chart-container">
-    <h3>⚠️ Estado de Rutas</h3>
+    <h3 class="title-with-icon">
+      <AppIcon name="alert-triangle" :size="20" />
+      <span>Estado de rutas</span>
+    </h3>
     <Doughnut :data="chartData" :options="chartOptions" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import AppIcon from './ui/AppIcon.vue';
 import { Doughnut } from 'vue-chartjs';
 import {
   Chart as ChartJS,
@@ -48,7 +52,7 @@ const estadisticas = computed(() => {
 });
 
 const chartData = computed(() => ({
-  labels: ['✅ OK', '⚠️ Alerta', '❌ Cancelar'],
+  labels: ['OK', 'Alerta', 'Cancelar'],
   datasets: [
     {
       data: [

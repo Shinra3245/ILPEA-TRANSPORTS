@@ -20,6 +20,9 @@ const token = ref<string | null>(null);
 const cargando = ref(false);
 const error = ref<string | null>(null);
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+const SESSION_SYNC_KEY = 'auth_last_sync_at';
+const SESSION_SYNC_GRACE_MS = 60 * 1000;
+let tokenPromise: Promise<string | null> | null = null;
 
 async function leerRespuestaSegura(respuesta: Response) {
   const contentType = respuesta.headers.get('content-type') || '';
@@ -38,9 +41,20 @@ async function leerRespuestaSegura(respuesta: Response) {
 function limpiarSesionLocal() {
   usuario.value = null;
   token.value = null;
+  tokenPromise = null;
   localStorage.removeItem('usuario');
   localStorage.removeItem('userRole');
   localStorage.removeItem('token');
+  localStorage.removeItem(SESSION_SYNC_KEY);
+}
+
+function registrarSincronizacionSesion() {
+  localStorage.setItem(SESSION_SYNC_KEY, String(Date.now()));
+}
+
+function sesionSincronizadaReciente() {
+  const raw = Number(localStorage.getItem(SESSION_SYNC_KEY));
+  return Number.isFinite(raw) && raw > 0 && (Date.now() - raw) < SESSION_SYNC_GRACE_MS;
 }
 
 async function sincronizarUsuarioConBackend(firebaseToken: string) {
@@ -67,6 +81,7 @@ async function sincronizarUsuarioConBackend(firebaseToken: string) {
   localStorage.setItem('usuario', JSON.stringify(data.usuario));
   localStorage.setItem('userRole', data.usuario.rol);
   localStorage.setItem('token', firebaseToken);
+  registrarSincronizacionSesion();
 }
 
 export function useAuth() {
@@ -100,7 +115,18 @@ export function useAuth() {
   };
 
   const restaurarSesion = async () => {
+    if (usuario.value && token.value && sesionSincronizadaReciente()) {
+      return true;
+    }
+
     if (auth.currentUser) {
+      if (usuario.value && sesionSincronizadaReciente()) {
+        const firebaseToken = await auth.currentUser.getIdToken();
+        token.value = firebaseToken;
+        localStorage.setItem('token', firebaseToken);
+        return true;
+      }
+
       try {
         const firebaseToken = await auth.currentUser.getIdToken();
         await sincronizarUsuarioConBackend(firebaseToken);
@@ -118,6 +144,7 @@ export function useAuth() {
       try {
         usuario.value = JSON.parse(userFromStorage);
         token.value = tokenFromStorage;
+        registrarSincronizacionSesion();
         return true;
       } catch (err) {
         limpiarSesionLocal();
@@ -128,11 +155,23 @@ export function useAuth() {
   };
 
   const obtenerToken = async () => {
+    if (tokenPromise) {
+      return tokenPromise;
+    }
+
     if (auth.currentUser) {
-      const firebaseToken = await auth.currentUser.getIdToken();
-      token.value = firebaseToken;
-      localStorage.setItem('token', firebaseToken);
-      return firebaseToken;
+      tokenPromise = auth.currentUser
+        .getIdToken()
+        .then((firebaseToken) => {
+          token.value = firebaseToken;
+          localStorage.setItem('token', firebaseToken);
+          return firebaseToken;
+        })
+        .finally(() => {
+          tokenPromise = null;
+        });
+
+      return tokenPromise;
     }
     return token.value;
   };
