@@ -27,3 +27,6 @@ Thumbs.db
 !tsconfig*.json
 !vite.config.*
 backend/config/
+# Firebase Admin key (obtener de Bitwarden)
+backend/config/firebase-key.json
+backend/config/*.json
