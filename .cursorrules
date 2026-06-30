@@ -1,0 +1,56 @@
+# ==========================================
+# REGLAS DEL PROYECTO PARA LA IA
+# ==========================================
+
+## DESCRIPCION DEL PROYECTO
+- Nombre: ILPEA-TRANSPORTS
+- Tipo: Web (monorepo backend + frontend)
+- Descripcion: Sistema de gestión de rutas y personal para empresa de transportes
+
+## STACK TECNOLOGICO
+
+### Backend
+- Runtime: Node.js
+- Framework: Express
+- Autenticacion: Firebase Admin SDK
+- Base de datos: Firebase Firestore
+- Puerto: 4000
+
+### Frontend
+- Framework: Vue 3 con Vite
+- Lenguaje: TypeScript
+- Estilos: CSS propio (tokens.css, main.css)
+- Router: Vue Router 4
+- Animaciones: @lottiefiles/dotlottie-vue
+
+### Data Science
+- Lenguaje: Python 3.12
+- Librerias: pandas, numpy, openpyxl, requests
+
+## ESTILO DE CODIGO
+- Usar siempre async/await, nunca callbacks ni .then() encadenados
+- Nombres de funciones y variables: camelCase
+- Nombres de componentes Vue: PascalCase
+- Nombres de archivos de componentes: PascalCase (ej: AdminSidebar.vue)
+- Nombres de archivos de utilidades: camelCase (ej: busqueda.ts)
+- Comentarios en español
+- Siempre manejar errores con try/catch en funciones async
+
+## ESTRUCTURA DE CARPETAS
+- backend/src/routes/     — definicion de rutas Express
+- backend/src/middleware/  — middlewares (auth, validacion)
+- backend/src/config/      — configuracion (Firebase, etc.)
+- backend/scripts/         — scripts de mantenimiento
+- frontend/src/views/      — vistas principales
+- frontend/src/components/ — componentes reutilizables
+- frontend/src/composables/ — lógica reutilizable (useAuth, etc.)
+- frontend/src/router/     — configuracion de rutas
+- frontend/src/lib/        — librerias y clientes externos
+- docs/                    — documentacion y scripts de seed
+
+## RESTRICCIONES
+- NO hardcodear URLs, claves ni contraseñas — usar variables de entorno
+- NO instalar librerias sin aprobacion del lider
+- NO hacer console.log en codigo que vaya a produccion
+- NO subir archivos .env, llaves Firebase ni venv de Python al repositorio
+- Las claves de Firebase Admin SOLO van en backend, nunca en frontend
