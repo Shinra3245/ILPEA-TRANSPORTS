@@ -1,22 +1,29 @@
-# Datos crudos y sensibles (¡Crucial para ILPEA!)
-data-science/data/*.xlsx
-data-science/data/*.csv
-data-science/data/*.pdf
-firebase-key.json
-backend/config/firebase-key.json
-backend/.env
+# Entornos virtuales Python
+data-science/src/venv/
+**/venv/
+**/__pycache__/
+*.pyc
 
-# Entornos Virtuales de Python
-venv/
-env/
-__pycache__/
-
-# Node / Frontend / Backend
-node_modules/
+# Variables de entorno (en cualquier nivel)
 .env
 .env.local
+backend/.env
+frontend/.env
 
-# Logs y SO
-*.log
+# Dependencias
+node_modules/
+dist/
+build/
+.expo/
+
+# Archivos de sistema
 .DS_Store
-archivos/
+Thumbs.db
+*.log
+
+# Llaves y credenciales
+*.json
+!package.json
+!tsconfig*.json
+!vite.config.*
+backend/config/
