@@ -1,0 +1,9 @@
+cat > data-science/.gitignore << 'EOF'
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+data/*.xlsx
+data/*.csv
+EOF
