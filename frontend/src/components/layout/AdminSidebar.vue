@@ -12,16 +12,23 @@
       <button
         type="button"
         @click="router.push('/admin/rutas')"
-        :class="['nav-item', { active: route.path === '/admin/rutas' }]"
+        :class="['nav-item', { active: route.path.startsWith('/admin/rutas') }]"
       >
-        Gestionar Rutas
+        Gestión de rutas
       </button>
       <button
         type="button"
-        @click="router.push('/admin/usuarios')"
-        :class="['nav-item', { active: route.path === '/admin/usuarios' }]"
+        @click="router.push('/admin/usuarios/jefes')"
+        :class="['nav-item', { active: route.path === '/admin/usuarios/jefes' }]"
       >
-        Usuarios
+        Jefes
+      </button>
+      <button
+        type="button"
+        @click="router.push('/admin/usuarios/empleados')"
+        :class="['nav-item', { active: route.path === '/admin/usuarios/empleados' }]"
+      >
+        Empleados
       </button>
       <button
         type="button"

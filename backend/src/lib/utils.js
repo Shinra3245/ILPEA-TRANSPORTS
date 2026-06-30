@@ -3,6 +3,7 @@ const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 const path = require('path');
 const crypto = require('crypto');
+const { ROLES } = require('../config/roles');
 
 function cargarCredencialesFirebase() {
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
@@ -134,58 +135,156 @@ async function verificarTransporterSMTP() {
     }
 }
 
+function filaCredencialCorreo(etiqueta, valor, { destacado = false, monospace = false } = {}) {
+    const valorEstilo = [
+        'padding: 14px 18px',
+        'border-bottom: 1px solid #e5e7eb',
+        'color: #000000',
+        'font-size: 14px',
+        `font-weight: ${destacado ? '700' : '600'}`,
+        monospace ? "font-family: 'Courier New', Courier, monospace" : "font-family: Inter, Arial, sans-serif",
+        destacado ? 'background: #f0fdf4' : 'background: #ffffff',
+    ].join('; ');
+
+    return `
+      <tr>
+        <td style="padding: 14px 18px; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; width: 38%; background: #f9fafb; font-family: Inter, Arial, sans-serif;">
+          ${etiqueta}
+        </td>
+        <td style="${valorEstilo}">
+          ${valor}
+        </td>
+      </tr>
+    `;
+}
+
 function construirContenidoCorreoCredenciales({ nombre, email, password, rol, idEmpleado = null }) {
     const rolNormalizado = String(rol || 'EMPLEADO').toUpperCase();
     const esJefe = rolNormalizado === 'JEFE';
-    const perfil = esJefe ? 'Jefe de Turno' : 'Empleado';
+    const perfil = esJefe ? 'Jefe de turno' : 'Empleado';
 
     const nombreSeguro = escapeHtml(nombre);
     const emailSeguro = escapeHtml(email);
     const passwordSeguro = escapeHtml(password);
     const idSeguro = idEmpleado ? escapeHtml(idEmpleado) : null;
 
-    const lineasCredencialesHtml = [
-        `<li><strong>Perfil:</strong> ${perfil}</li>`,
-        `<li><strong>Nombre:</strong> ${nombreSeguro}</li>`,
-        `<li><strong>Correo:</strong> ${emailSeguro}</li>`,
-        `<li><strong>Contraseña temporal:</strong> ${passwordSeguro}</li>`
+    const filasHtml = [
+        filaCredencialCorreo('Perfil', escapeHtml(perfil)),
+        ...(idSeguro ? [filaCredencialCorreo('ID empleado', idSeguro, { monospace: true })] : []),
+        filaCredencialCorreo('Nombre', nombreSeguro),
+        filaCredencialCorreo('Correo', emailSeguro),
+        filaCredencialCorreo('Contraseña temporal', passwordSeguro, { destacado: true, monospace: true }),
     ];
 
     const lineasCredencialesTexto = [
         `Perfil: ${perfil}`,
+        ...(idEmpleado ? [`ID empleado: ${idEmpleado}`] : []),
         `Nombre: ${nombre}`,
         `Correo: ${email}`,
-        `Contrasena temporal: ${password}`
+        `Contraseña temporal: ${password}`,
     ];
 
-    if (idSeguro) {
-        lineasCredencialesHtml.unshift(`<li><strong>ID de empleado:</strong> ${idSeguro}</li>`);
-        lineasCredencialesTexto.unshift(`ID de empleado: ${idEmpleado}`);
-    }
-
     const asunto = esJefe
-        ? 'Acceso de Jefe de Turno - ILPEA TRANSPORTS'
-        : 'Credenciales de acceso - ILPEA TRANSPORTS';
+        ? 'Acceso de jefe de turno — ILPEA Transporte'
+        : 'Credenciales de acceso — ILPEA Transporte';
+
+    const urlLogin = normalizarVariableEntorno(process.env.FRONTEND_URL || process.env.APP_URL || '');
+    const botonLogin = urlLogin
+        ? `
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 28px auto 8px;">
+          <tr>
+            <td style="border-radius: 8px; background: #000000;">
+              <a href="${escapeHtml(urlLogin)}" target="_blank" rel="noopener noreferrer"
+                style="display: inline-block; padding: 14px 28px; font-family: Inter, Arial, sans-serif; font-size: 14px; font-weight: 700; color: #ffffff; text-decoration: none; letter-spacing: 0.03em;">
+                Ingresar al sistema
+              </a>
+            </td>
+          </tr>
+        </table>
+        <p style="margin: 0; text-align: center; font-size: 12px; color: #6b7280; font-family: Inter, Arial, sans-serif;">
+          ${escapeHtml(urlLogin)}
+        </p>
+      `
+        : '';
 
     const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #111827;">
-      <h2 style="margin-bottom: 8px;">Bienvenido(a) a ILPEA TRANSPORTS</h2>
-      <p>Se ha creado tu usuario de <strong>${perfil}</strong> con los siguientes datos:</p>
-      <ul>
-        ${lineasCredencialesHtml.join('\n        ')}
-      </ul>
-      <p>Inicia sesión con tu correo y la contraseña temporal. Por seguridad, cámbiala después del primer acceso.</p>
-      <hr style="border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">Este es un mensaje automático, por favor no respondas este correo.</p>
-    </div>
-  `;
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(asunto)}</title>
+</head>
+<body style="margin: 0; padding: 0; background: #f3f4f6; font-family: Inter, Arial, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #f3f4f6; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; box-shadow: 0 4px 24px rgba(0,0,0,0.06);">
+          <tr>
+            <td style="background: #000000; padding: 28px 32px 24px;">
+              <p style="margin: 0 0 4px; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">ILPEA Transporte</p>
+              <p style="margin: 0; font-size: 13px; color: #9ca3af; letter-spacing: 0.06em; text-transform: uppercase;">Gestión de flota</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="height: 4px; background: #107c41; font-size: 0; line-height: 0;">&nbsp;</td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 32px 8px;">
+              <p style="margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #000000;">Bienvenido(a), ${nombreSeguro}</p>
+              <p style="margin: 0; font-size: 15px; line-height: 1.6; color: #374151;">
+                Se creó tu cuenta de <strong>${escapeHtml(perfil)}</strong> en ILPEA Transporte.
+                Usa las credenciales siguientes para iniciar sesión.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 20px 32px 8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden;">
+                ${filasHtml.join('')}
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px 32px 8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 8px;">
+                <tr>
+                  <td style="padding: 14px 16px; font-size: 13px; line-height: 1.5; color: #92400e;">
+                    Por seguridad, cambia tu contraseña después del primer acceso.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          ${botonLogin ? `<tr><td style="padding: 8px 32px 32px;">${botonLogin}</td></tr>` : '<tr><td style="padding-bottom: 32px;"></td></tr>'}
+          <tr>
+            <td style="padding: 20px 32px; background: #f9fafb; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #6b7280; text-align: center;">
+                Mensaje automático de ILPEA Transporte. No respondas a este correo.<br />
+                Si no solicitaste esta cuenta, contacta a tu administrador.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
 
     const text = [
-        'Bienvenido(a) a ILPEA TRANSPORTS.',
-        `Se ha creado tu usuario de ${perfil} con los siguientes datos:`,
+        'ILPEA Transporte — Gestión de flota',
+        '',
+        `Hola ${nombre},`,
+        `Se creó tu cuenta de ${perfil}.`,
+        '',
         ...lineasCredencialesTexto,
-        'Inicia sesion con tu correo y la contrasena temporal.',
-        'Por seguridad, cambiala despues del primer acceso.'
+        '',
+        'Por seguridad, cambia tu contraseña después del primer acceso.',
+        ...(urlLogin ? ['', `Ingresar: ${urlLogin}`] : []),
+        '',
+        'Mensaje automático. No respondas a este correo.',
     ].join('\n');
 
     return { asunto, html, text };
@@ -371,6 +470,73 @@ function obtenerNumeroSemanaISO(fecha) {
     return Math.ceil((((fechaUTC.getTime() - inicioAnio.getTime()) / 86400000) + 1) / 7);
 }
 
+function obtenerRangoSemanaISO(anio, semana) {
+    const semanaNumero = Number(semana);
+    const anioNumero = Number(anio) || new Date().getFullYear();
+
+    if (!Number.isInteger(semanaNumero) || semanaNumero < 1 || semanaNumero > 53) {
+        return null;
+    }
+
+    const inicioSemanaUno = new Date(Date.UTC(anioNumero, 0, 4));
+    const diaSemana = inicioSemanaUno.getUTCDay() || 7;
+    const desde = new Date(inicioSemanaUno);
+    desde.setUTCDate(inicioSemanaUno.getUTCDate() - diaSemana + 1 + (semanaNumero - 1) * 7);
+
+    const hasta = new Date(desde);
+    hasta.setUTCDate(desde.getUTCDate() + 6);
+
+    return {
+        desde: formatearFechaISO(desde),
+        hasta: formatearFechaISO(hasta),
+        anio: anioNumero,
+        semana: semanaNumero
+    };
+}
+
+function evaluarAlertas({ tipoUnidad, capacidadReal, pasajeros }) {
+    const maxPasajeros = Number(pasajeros) || 0;
+    const capacidad = Number(capacidadReal) || 0;
+    const porcentaje = capacidad > 0 ? (maxPasajeros / capacidad) * 100 : 0;
+    const alerta = porcentaje < 40 ? 'CANCELAR RUTA - Menor al 40%' : 'OK';
+    const tipo = String(tipoUnidad || '').toLowerCase();
+    const sugerencia = tipo.includes('autobus') && maxPasajeros <= 12
+        ? 'CAMBIAR A VAN'
+        : 'MANTENER UNIDAD';
+
+    return {
+        ocupacion_pct: Number(porcentaje.toFixed(2)),
+        porcentaje_ocupacion_max: Number(porcentaje.toFixed(2)),
+        alerta_ocupacion: alerta,
+        sugerencia_right_sizing: sugerencia
+    };
+}
+
+function construirMetricasOperativas({ tipoUnidad, capacidadLimite, asientosOcupados, programada }) {
+    if (!programada && asientosOcupados === 0) {
+        return {
+            ocupacion_pct: 0,
+            porcentaje_ocupacion_max: 0,
+            alerta_ocupacion: 'SIN PROGRAMACIÓN',
+            sugerencia_right_sizing: 'SIN DATOS OPERATIVOS',
+            max_pasajeros_dia: 0,
+            fuente_datos: 'catalogo_sin_programacion'
+        };
+    }
+
+    const metricas = evaluarAlertas({
+        tipoUnidad,
+        capacidadReal: capacidadLimite,
+        pasajeros: asientosOcupados
+    });
+
+    return {
+        ...metricas,
+        max_pasajeros_dia: asientosOcupados,
+        fuente_datos: programada ? 'programacion_diaria' : 'catalogo_sin_programacion'
+    };
+}
+
 function normalizarPeriodoRuta(rutaData, fechaDefault = new Date()) {
     const fechaDetectada = convertirAFecha(
         rutaData?.fecha_operacion
@@ -514,11 +680,11 @@ function puedeGestionarEmpleado(usuario, empleadoData) {
         return false;
     }
 
-    if (usuario.rol === exports.ROLES?.ADMIN) {
+    if (usuario.rol === ROLES.ADMIN) {
         return true;
     }
 
-    return usuario.rol === exports.ROLES?.JEFE && empleadoData.jefe_uid === usuario.uid;
+    return usuario.rol === ROLES.JEFE && empleadoData.jefe_uid === usuario.uid;
 }
 
 function textoNormalizado(valor) {
@@ -828,14 +994,14 @@ async function obtenerContextoEmpleadosChat(usuario, limite = 20) {
     try {
         let consulta;
 
-        if (usuario.rol === exports.ROLES?.JEFE) {
+        if (usuario.rol === ROLES.JEFE) {
             consulta = db.collection('usuarios')
-                .where('rol', '==', exports.ROLES.EMPLEADO)
+                .where('rol', '==', ROLES.EMPLEADO)
                 .where('jefe_uid', '==', usuario.uid)
                 .limit(limite);
         } else {
             consulta = db.collection('usuarios')
-                .where('rol', '==', exports.ROLES.EMPLEADO)
+                .where('rol', '==', ROLES.EMPLEADO)
                 .limit(limite);
         }
 
@@ -1430,6 +1596,294 @@ function siguienteAsientoDisponible(asientosOcupados, capacidadMaxima) {
     throw new Error('TARGET_CAPACITY_EXCEEDED: No hay asientos disponibles en la ruta destino.');
 }
 
+function crearErrorHttp(status, message) {
+    const error = new Error(message);
+    error.status = status;
+    return error;
+}
+
+async function existeIdEmpleado(idEmpleado, excluirUid = null) {
+    const id = textoNormalizado(idEmpleado);
+    if (!id) {
+        return false;
+    }
+
+    const snapshot = await db
+        .collection('usuarios')
+        .where('id_empleado', '==', id)
+        .limit(1)
+        .get();
+
+    if (snapshot.empty) {
+        return false;
+    }
+
+    if (excluirUid && snapshot.docs[0].id === excluirUid) {
+        return false;
+    }
+
+    return true;
+}
+
+async function contarEmpleadosDeJefe(jefeUid) {
+    const snapshot = await db
+        .collection('usuarios')
+        .where('rol', '==', ROLES.EMPLEADO)
+        .where('jefe_uid', '==', jefeUid)
+        .get();
+
+    let total = 0;
+    snapshot.forEach((doc) => {
+        const data = doc.data() || {};
+        if (data.activo !== false) {
+            total += 1;
+        }
+    });
+
+    return total;
+}
+
+function esRutaActiva(rutaData) {
+    if (!rutaData || typeof rutaData !== 'object') {
+        return true;
+    }
+
+    return rutaData.activa !== false;
+}
+
+async function resolverEmpleadoPorIdEmpleado(idEmpleado, cache = new Map()) {
+    const id = textoNormalizado(idEmpleado);
+    if (!id) {
+        return null;
+    }
+
+    if (cache.has(id)) {
+        return cache.get(id);
+    }
+
+    const snapshot = await db.collection('usuarios')
+        .where('id_empleado', '==', id)
+        .where('rol', '==', ROLES.EMPLEADO)
+        .limit(1)
+        .get();
+
+    const empleado = !snapshot.empty
+        ? {
+            id_empleado: id,
+            nombre: textoNormalizado(snapshot.docs[0].data()?.nombre) || id,
+            email: textoNormalizado(snapshot.docs[0].data()?.email) || null,
+        }
+        : {
+            id_empleado: id,
+            nombre: id,
+            email: null,
+        };
+
+    cache.set(id, empleado);
+    return empleado;
+}
+
+async function obtenerBloqueoEliminacionRuta(idRuta) {
+    const rutaEncontrada = await resolverRutaPorIdentificador(idRuta);
+    if (!rutaEncontrada) {
+        throw crearErrorHttp(404, 'La ruta no existe.');
+    }
+
+    const fechaMinima = fechaISOHoy();
+    const snapshot = await db.collection('programacion_diaria')
+        .where('id_ruta', '==', rutaEncontrada.id)
+        .get();
+
+    const empleadosMap = new Map();
+    const cacheEmpleados = new Map();
+
+    snapshot.forEach((doc) => {
+        const data = doc.data() || {};
+        const fecha = textoNormalizado(data.fecha);
+        if (!fecha || fecha < fechaMinima) {
+            return;
+        }
+
+        const pasajerosIds = Array.isArray(data.pasajeros_ids) ? data.pasajeros_ids : [];
+        if (!pasajerosIds.length) {
+            return;
+        }
+
+        const turno = textoNormalizado(data.turno) || null;
+        const asientosPorEmpleado = normalizarAsientosPorEmpleado(data.asientos_por_empleado);
+        const asientosReservados = normalizarAsientosReservados(data.asientos_reservados);
+
+        pasajerosIds.forEach((pasajeroId, index) => {
+            const idEmpleado = textoNormalizado(pasajeroId);
+            if (!idEmpleado) {
+                return;
+            }
+
+            const asientoDesdeMapa = asientosPorEmpleado[idEmpleado];
+            const asiento = Number.isFinite(Number(asientoDesdeMapa))
+                ? Number(asientoDesdeMapa)
+                : (Number.isFinite(Number(asientosReservados[index])) ? Number(asientosReservados[index]) : null);
+
+            const clave = `${idEmpleado}|${fecha}|${turno || ''}`;
+            if (!empleadosMap.has(clave)) {
+                empleadosMap.set(clave, {
+                    id_empleado: idEmpleado,
+                    fecha,
+                    turno,
+                    asiento,
+                });
+            }
+        });
+    });
+
+    const empleadosPendientes = Array.from(empleadosMap.values());
+
+    await Promise.all(
+        empleadosPendientes.map(async (item) => {
+            const info = await resolverEmpleadoPorIdEmpleado(item.id_empleado, cacheEmpleados);
+            item.nombre = info?.nombre || item.id_empleado;
+            item.email = info?.email || null;
+        })
+    );
+
+    empleadosPendientes.sort((a, b) => {
+        const fechaCmp = String(a.fecha).localeCompare(String(b.fecha));
+        if (fechaCmp !== 0) {
+            return fechaCmp;
+        }
+
+        return String(a.nombre).localeCompare(String(b.nombre), 'es');
+    });
+
+    const rutaData = rutaEncontrada.data || {};
+
+    return {
+        ruta: {
+            id: rutaEncontrada.id,
+            ruta: rutaData.ruta ?? null,
+            zona: rutaData.zona || rutaData.nombre || null,
+            tipo_unidad: rutaData['tipo de unidad'] || null,
+            activa: esRutaActiva(rutaData),
+            eliminada_en: rutaData.eliminada_en || null,
+        },
+        puede_eliminar: empleadosPendientes.length === 0,
+        total_pasajeros: empleadosPendientes.length,
+        empleados_a_reasignar: empleadosPendientes,
+    };
+}
+
+async function liberarAsignacionesPorIdEmpleado(idEmpleado) {
+    const id = textoNormalizado(idEmpleado);
+    if (!id) {
+        return 0;
+    }
+
+    const snapshot = await db
+        .collection('programacion_diaria')
+        .where('pasajeros_ids', 'array-contains', id)
+        .get();
+
+    if (snapshot.empty) {
+        return 0;
+    }
+
+    const actualizaciones = [];
+
+    snapshot.forEach((doc) => {
+        const data = doc.data() || {};
+        const pasajerosActuales = Array.isArray(data.pasajeros_ids) ? data.pasajeros_ids : [];
+        const pasajerosIds = pasajerosActuales.filter((pasajero) => textoNormalizado(pasajero) !== id);
+        const asientosPorEmpleado = normalizarAsientosPorEmpleado(data.asientos_por_empleado);
+        delete asientosPorEmpleado[id];
+
+        actualizaciones.push({
+            ref: doc.ref,
+            pasajeros_ids: pasajerosIds,
+            asientos_por_empleado: asientosPorEmpleado,
+        });
+    });
+
+    const BATCH_SIZE = 400;
+    for (let indice = 0; indice < actualizaciones.length; indice += BATCH_SIZE) {
+        const lote = actualizaciones.slice(indice, indice + BATCH_SIZE);
+        const batch = db.batch();
+
+        lote.forEach((item) => {
+            batch.update(item.ref, {
+                pasajeros_ids: item.pasajeros_ids,
+                asientos_por_empleado: item.asientos_por_empleado,
+                actualizado_en: new Date(),
+            });
+        });
+
+        await batch.commit();
+    }
+
+    return actualizaciones.length;
+}
+
+async function eliminarUsuarioDefinitivo({
+    uid,
+    rolEsperado = null,
+    usuarioSolicitante = null,
+    validarPermisoEmpleado = false,
+    invalidarCacheUsuario = null,
+}) {
+    const ref = db.collection('usuarios').doc(uid);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+        throw crearErrorHttp(404, 'Usuario no encontrado.');
+    }
+
+    const data = snapshot.data() || {};
+
+    if (rolEsperado && data.rol !== rolEsperado) {
+        throw crearErrorHttp(
+            403,
+            `Solo se pueden eliminar usuarios con rol ${rolEsperado}.`
+        );
+    }
+
+    if (validarPermisoEmpleado && !puedeGestionarEmpleado(usuarioSolicitante, data)) {
+        throw crearErrorHttp(403, 'No puedes eliminar empleados que no te pertenecen.');
+    }
+
+    if (data.rol === ROLES.JEFE) {
+        const empleadosAsignados = await contarEmpleadosDeJefe(uid);
+        if (empleadosAsignados > 0) {
+            throw crearErrorHttp(
+                409,
+                `No se puede eliminar: tiene ${empleadosAsignados} empleado(s) asignados. Reasígnalos o elimínalos primero.`
+            );
+        }
+    }
+
+    if (data.rol === ROLES.EMPLEADO) {
+        const idEmpleado = textoNormalizado(data.id_empleado) || construirIdEmpleadoDesdeUid(uid);
+        await liberarAsignacionesPorIdEmpleado(idEmpleado);
+    }
+
+    try {
+        await admin.auth().deleteUser(uid);
+    } catch (error) {
+        if (error.code !== 'auth/user-not-found') {
+            throw error;
+        }
+    }
+
+    await ref.delete();
+
+    if (typeof invalidarCacheUsuario === 'function') {
+        invalidarCacheUsuario(uid);
+    }
+
+    return {
+        uid,
+        rol: data.rol,
+    };
+}
+
 module.exports = {
     admin,
     db,
@@ -1450,6 +1904,9 @@ module.exports = {
     convertirAFecha,
     formatearFechaISO,
     obtenerNumeroSemanaISO,
+    obtenerRangoSemanaISO,
+    evaluarAlertas,
+    construirMetricasOperativas,
     normalizarPeriodoRuta,
     generarIdEmpleadoUnico,
     construirIdEmpleadoDesdeUid,
@@ -1458,6 +1915,14 @@ module.exports = {
     normalizarEmpleado,
     normalizarJefe,
     puedeGestionarEmpleado,
+    existeIdEmpleado,
+    contarEmpleadosDeJefe,
+    liberarAsignacionesPorIdEmpleado,
+    esRutaActiva,
+    resolverEmpleadoPorIdEmpleado,
+    obtenerBloqueoEliminacionRuta,
+    eliminarUsuarioDefinitivo,
+    crearErrorHttp,
     textoNormalizado,
     turnoNormalizado,
     construirIdsProgramacion,

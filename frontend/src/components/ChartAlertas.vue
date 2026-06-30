@@ -4,7 +4,9 @@
       <AppIcon name="alert-triangle" :size="20" />
       <span>Estado de rutas</span>
     </h3>
-    <Doughnut :data="chartData" :options="chartOptions" />
+    <div class="chart-canvas-wrapper">
+      <Doughnut :data="chartData" :options="chartOptions" />
+    </div>
   </div>
 </template>
 
@@ -19,6 +21,8 @@ import {
   Legend
 } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
+import type { Context as DataLabelContext } from 'chartjs-plugin-datalabels';
+import type { TooltipItem } from 'chart.js';
 
 ChartJS.register(ArcElement, Tooltip, Legend, ChartDataLabels);
 
@@ -38,10 +42,14 @@ const estadisticas = computed(() => {
   let alerta = 0;
   let cancelar = 0;
 
-  props.rutas.forEach(ruta => {
-    if (ruta.alerta_ocupacion === 'OK') {
+  props.rutas.forEach((ruta) => {
+    const textoAlerta = String(ruta.alerta_ocupacion || '');
+    if (textoAlerta.includes('SIN PROGRAMACIÓN') || textoAlerta.includes('SIN DATOS')) {
+      return;
+    }
+    if (textoAlerta === 'OK') {
       ok++;
-    } else if (ruta.alerta_ocupacion.includes('CANCELAR')) {
+    } else if (textoAlerta.includes('CANCELAR')) {
       cancelar++;
     } else {
       alerta++;
@@ -75,38 +83,57 @@ const chartData = computed(() => ({
   ]
 }));
 
-const chartOptions = {
+const chartOptions = computed(() => ({
   responsive: true,
-  maintainAspectRatio: true,
+  maintainAspectRatio: false,
+  cutout: '58%',
+  layout: {
+    padding: 8
+  },
   plugins: {
     legend: {
       display: true,
       position: 'bottom' as const,
       labels: {
         font: { size: 12 },
-        padding: 15
+        padding: 12,
+        boxWidth: 12
       }
     },
     tooltip: {
       callbacks: {
-        label: (context: any) => {
-          const total = context.dataset.data.reduce((a: number, b: number) => a + b, 0);
-          const percentage = ((context.parsed / total) * 100).toFixed(1);
+        label: (context: TooltipItem<'doughnut'>) => {
+          const data = context.dataset.data as number[];
+          const total = data.reduce((a, b) => a + Number(b), 0);
+          const percentage = total > 0 ? ((context.parsed / total) * 100).toFixed(1) : '0.0';
           return `${context.label}: ${context.parsed} rutas (${percentage}%)`;
         }
       }
     },
     datalabels: {
+      display: (context: DataLabelContext) => {
+        const data = context.dataset.data as number[];
+        const value = Number(data[context.dataIndex]);
+        if (value <= 0) return false;
+
+        const total = data.reduce((a, b) => a + Number(b), 0);
+        if (total <= 0) return false;
+
+        return (value / total) * 100 >= 12;
+      },
       color: '#ffffff',
-      font: { weight: 'bold' as const, size: 12 },
-      formatter: (value: number, context: any) => {
-        const total = context.dataset.data.reduce((a: number, b: number) => a + b, 0);
+      font: { weight: 'bold' as const, size: 11 },
+      anchor: 'center' as const,
+      align: 'center' as const,
+      formatter: (value: number, context: DataLabelContext) => {
+        const data = context.dataset.data as number[];
+        const total = data.reduce((a, b) => a + Number(b), 0);
         const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
-        return `${value} (${percentage}%)`;
+        return `${value}\n(${percentage}%)`;
       }
     }
   }
-};
+}));
 </script>
 
 <style scoped>
@@ -123,5 +150,19 @@ const chartOptions = {
   margin-top: 0;
   color: #1e293b;
   font-size: 1.1rem;
+}
+
+.chart-canvas-wrapper {
+  position: relative;
+  height: 280px;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .chart-canvas-wrapper {
+    height: 240px;
+    max-width: 100%;
+  }
 }
 </style>

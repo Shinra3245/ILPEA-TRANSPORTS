@@ -46,6 +46,12 @@ function guardarUsuarioCache(uid, userData) {
   });
 }
 
+function invalidarCacheUsuario(uid) {
+  if (uid) {
+    userCache.delete(uid);
+  }
+}
+
 /**
  * Middleware: Verificar token de Firebase y extraer datos del usuario
  * Busca el token en el header Authorization: Bearer <token>
@@ -238,5 +244,6 @@ module.exports = {
   autenticar,
   autorizar,
   autenticarSimulado,
-  registrarAccion
+  registrarAccion,
+  invalidarCacheUsuario,
 };

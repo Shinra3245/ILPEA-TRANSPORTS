@@ -20,12 +20,26 @@ const router = createRouter({
       component: () => import('../views/GestionRutas.vue'),
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
+    {
+      path: '/admin/rutas/eliminacion',
+      redirect: { path: '/admin/rutas', query: { tab: 'administracion' } },
+    },
 
-    // --- NUEVA RUTA PARA GESTIÓN DE USUARIOS (SOLUCIÓN) ---
+    // --- Gestión de usuarios (jefes y empleados por separado) ---
     {
       path: '/admin/usuarios',
-      name: 'AdminUsers',
-      component: () => import('../views/AdminUsers.vue'),
+      redirect: '/admin/usuarios/jefes',
+    },
+    {
+      path: '/admin/usuarios/jefes',
+      name: 'AdminJefes',
+      component: () => import('../views/AdminJefes.vue'),
+      meta: { requiresAuth: true, role: 'ADMIN' }
+    },
+    {
+      path: '/admin/usuarios/empleados',
+      name: 'AdminEmpleados',
+      component: () => import('../views/AdminEmpleados.vue'),
       meta: { requiresAuth: true, role: 'ADMIN' }
     },
 
