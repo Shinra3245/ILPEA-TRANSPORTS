@@ -9,7 +9,7 @@ const authRoutes = require('./routes/auth');
 const app = express();
 // Importar configuración de RBAC y utilidades
 const { ROLES } = require('./config/roles');
-const { autenticar, autorizar, autenticarSimulado, registrarAccion } = require('./middleware/auth');
+const { autenticar, autorizar, autenticarSimulado, registrarAccion, invalidarCacheUsuario } = require('./middleware/auth');
 const utils = require('./lib/utils');
 const {
   db,
@@ -19,11 +19,17 @@ const {
   generarRespuestaFallback,
   convertirAFecha,
   obtenerNumeroSemanaISO,
+  obtenerRangoSemanaISO,
+  construirMetricasOperativas,
   esEmailValido,
   generarPasswordTemporal,
   programarEnvioCorreoAltaEmpleado,
   programarEnvioCorreoAltaJefe,
-  verificarTransporterSMTP
+  verificarTransporterSMTP,
+  existeIdEmpleado,
+  eliminarUsuarioDefinitivo,
+  esRutaActiva,
+  obtenerBloqueoEliminacionRuta,
 } = utils;
 
 const NOTIFICACION_CORREO_EN_PROCESO = {
@@ -161,7 +167,7 @@ function normalizarEmpleado(doc) {
     nombre: data.nombre,
     rol: data.rol,
     jefe_uid: data.jefe_uid || null,
-    activo: data.activo,
+    activo: data.activo !== false,
     creado_en: data.creado_en,
     actualizado_en: data.actualizado_en,
     creado_por: data.creado_por,
@@ -176,7 +182,7 @@ function normalizarJefe(doc) {
     email: data.email,
     nombre: data.nombre,
     rol: data.rol,
-    activo: data.activo,
+    activo: data.activo !== false,
     creado_en: data.creado_en,
     actualizado_en: data.actualizado_en,
     creado_por: data.creado_por,
@@ -216,6 +222,15 @@ function construirIdsProgramacion(fecha, idRuta, turno) {
 
   ids.push(`${fechaTexto}_${idRutaTexto}`);
   return ids;
+}
+
+function obtenerEstadoProgramacion(data) {
+  const estado = textoNormalizado(data?.estado || data?.estado_programacion).toLowerCase();
+  return estado === 'cancelada' ? 'cancelada' : 'activa';
+}
+
+function esProgramacionCancelada(data) {
+  return obtenerEstadoProgramacion(data) === 'cancelada';
 }
 
 function normalizarAsientosReservados(asientos) {
@@ -356,6 +371,7 @@ function construirProgramacionBase({ fecha, idRuta, turno, rutaData, uidCreador 
     asientos_reservados: [],
     pasajeros_ids: [],
     asientos_por_empleado: {},
+    estado: 'activa',
     programada_auto: true,
     zona: rutaData.zona || rutaData.nombre || null,
     tipo_unidad: rutaData['tipo de unidad'] || null,
@@ -605,6 +621,7 @@ function generarInsightsLocales(rutas) {
         descripcion: `La ruta ${nombreRuta} tiene una ocupación del ${formatearValorPorcentaje(ocupacion)}%, menor al 40%.`,
         prioridad: 'alta',
         ruta_id: rutaId,
+        tipo_accion: 'cancelar_reasignar',
         prob_cancelacion: probabilidadCancelacion,
         ruta_alternativa_sugerida: null
       });
@@ -617,8 +634,11 @@ function generarInsightsLocales(rutas) {
         descripcion: `La ruta ${nombreRuta} tiene ${pasajeros} pasajeros, se sugiere cambiar a una Van.`,
         prioridad: 'media',
         ruta_id: rutaId,
+        tipo_accion: 'cambiar_unidad',
         prob_cancelacion: null,
-        ruta_alternativa_sugerida: null
+        ruta_alternativa_sugerida: null,
+        tipo_unidad_sugerida: 'VAN',
+        capacidad_sugerida: Math.max(pasajeros, 12)
       });
     }
   });
@@ -631,6 +651,7 @@ const COLECCION_FEEDBACK_IA = 'ai_feedback_recomendaciones';
 const COLECCION_PLANES_IA = 'ai_planes_ejecutados';
 const SEMANAS_MEMORIA_DEFECTO = 4;
 const DECISIONES_IA_VALIDAS = ['ACEPTADA', 'RECHAZADA', 'PENDIENTE'];
+const TIPOS_ACCION_INSIGHT = ['cancelar_reasignar', 'cambiar_unidad'];
 
 function obtenerTipoEjemploPorDecision(decision) {
   if (decision === 'ACEPTADA') {
@@ -687,6 +708,47 @@ function calcularEstadoImpactoPlan(cantidadEmpleadosMovidos) {
   }
 
   return 'bajo';
+}
+
+function formatearEtiquetaRuta(rutaData, rutaId) {
+  const numeroRuta = rutaData?.ruta;
+  const zona = textoNormalizado(
+    rutaData?.zona
+    || rutaData?.nombre
+    || rutaData?.['ruta nombre']
+    || rutaData?.nombre_ruta
+  );
+  const idTexto = textoNormalizado(rutaId);
+
+  if (numeroRuta != null && zona) {
+    return `Ruta ${numeroRuta} - ${zona}`;
+  }
+
+  if (numeroRuta != null) {
+    return `Ruta ${numeroRuta}`;
+  }
+
+  if (zona) {
+    return zona;
+  }
+
+  return idTexto || 'N/D';
+}
+
+async function obtenerEtiquetaRutaPorId(idRuta, cache = new Map()) {
+  const idTexto = textoNormalizado(idRuta);
+  if (!idTexto) {
+    return 'N/D';
+  }
+
+  if (cache.has(idTexto)) {
+    return cache.get(idTexto);
+  }
+
+  const ruta = await resolverRutaPorIdentificador(idTexto);
+  const etiqueta = ruta ? formatearEtiquetaRuta(ruta.data, ruta.id) : idTexto;
+  cache.set(idTexto, etiqueta);
+  return etiqueta;
 }
 
 function formatearFechaISO(fecha) {
@@ -808,6 +870,23 @@ function crearIdRecomendacion(rutaId, indice = 0) {
   return `REC-${Date.now()}-${fragmentoRuta}-${indice + 1}`;
 }
 
+function inferirTipoAccionInsight(insight) {
+  const accionExplicita = textoNormalizado(
+    insight?.tipo_accion || insight?.accion || insight?.action_type || insight?.tipo_recomendacion
+  ).toLowerCase();
+
+  if (TIPOS_ACCION_INSIGHT.includes(accionExplicita)) {
+    return accionExplicita;
+  }
+
+  const texto = `${textoNormalizado(insight?.titulo || insight?.title)} ${textoNormalizado(insight?.descripcion || insight?.description)}`.toLowerCase();
+  if (texto.includes('van') || texto.includes('unidad') || texto.includes('vehiculo') || texto.includes('vehículo') || texto.includes('right')) {
+    return 'cambiar_unidad';
+  }
+
+  return 'cancelar_reasignar';
+}
+
 function sanitizarInsight(insight, indice = 0) {
   if (!insight || typeof insight !== 'object') {
     return null;
@@ -819,6 +898,8 @@ function sanitizarInsight(insight, indice = 0) {
   const prioridadRaw = textoNormalizado(insight.prioridad || 'media').toLowerCase();
   const prioridad = ['alta', 'media', 'baja'].includes(prioridadRaw) ? prioridadRaw : 'media';
   const probCancelacion = Number(insight.prob_cancelacion ?? insight.probabilidad_cancelacion);
+  const capacidadSugerida = Number(insight.capacidad_sugerida ?? insight.capacidad_limite_sugerida);
+  const tipoAccion = inferirTipoAccionInsight(insight);
 
   if (!rutaId || !titulo || !descripcion) {
     return null;
@@ -830,10 +911,14 @@ function sanitizarInsight(insight, indice = 0) {
     descripcion,
     prioridad,
     ruta_id: rutaId,
+    tipo_accion: tipoAccion,
     prob_cancelacion: Number.isFinite(probCancelacion) ? Number(probCancelacion.toFixed(2)) : null,
     ruta_alternativa_sugerida: textoNormalizado(
       insight.ruta_alternativa_sugerida || insight.ruta_destino_id || insight.ruta_destino || ''
-    ) || null
+    ) || null,
+    tipo_unidad_sugerida: textoNormalizado(insight.tipo_unidad_sugerida || insight.unidad_sugerida || '') || null,
+    capacidad_sugerida: Number.isInteger(capacidadSugerida) && capacidadSugerida > 0 ? capacidadSugerida : null,
+    codigo_unidad_sugerido: textoNormalizado(insight.codigo_unidad_sugerido || insight.codigo_unidad || '') || null
   };
 }
 
@@ -1105,6 +1190,10 @@ app.get('/api/rutas', autorizar('rutas:ver'), async (req, res) => {
 
     rutasSnapshot.forEach(doc => {
       const rutaData = doc.data() || {};
+      if (!esRutaActiva(rutaData)) {
+        return;
+      }
+
       rutas.push({
         id: doc.id,
         ...rutaData,
@@ -1123,6 +1212,202 @@ app.get('/api/rutas', autorizar('rutas:ver'), async (req, res) => {
   }
 });
 
+async function construirListaRutasOperativas(fecha, turno) {
+  const rutasSnapshot = await db.collection('rutas').get();
+
+  const rutas = await Promise.all(rutasSnapshot.docs.map(async (rutaDoc) => {
+    const rutaData = rutaDoc.data() || {};
+    if (!esRutaActiva(rutaData)) {
+      return null;
+    }
+
+    const programacion = await resolverProgramacion(fecha, rutaDoc.id, turno);
+    const dataProgramacion = programacion.data || {};
+
+    const capacidadLimite = Number(dataProgramacion.capacidad_limite) || Number(rutaData.capacidad_real) || 12;
+    const asientosReservados = normalizarAsientosReservados(dataProgramacion.asientos_reservados);
+    const asientosPorEmpleado = normalizarAsientosPorEmpleado(dataProgramacion.asientos_por_empleado);
+    const pasajerosIds = Array.isArray(dataProgramacion.pasajeros_ids) ? dataProgramacion.pasajeros_ids : [];
+    const asientosOcupadosDato = Number(dataProgramacion.asientos_ocupados);
+    const asientosOcupados = Number.isFinite(asientosOcupadosDato)
+      ? asientosOcupadosDato
+      : Math.max(asientosReservados.length, pasajerosIds.length);
+    const estadoProgramacion = obtenerEstadoProgramacion(dataProgramacion);
+    const programada = Boolean(programacion.data);
+    const tipoUnidad = dataProgramacion.tipo_unidad || rutaData['tipo de unidad'] || null;
+    const metricas = construirMetricasOperativas({
+      tipoUnidad,
+      capacidadLimite,
+      asientosOcupados,
+      programada
+    });
+
+    return {
+      id: rutaDoc.id,
+      ...rutaData,
+      ...metricas,
+      ...normalizarPeriodoRuta({ ...rutaData, fecha_programada: fecha }, convertirAFecha(fecha) || new Date()),
+      programada,
+      programacion_id: programacion.docId,
+      fecha_programada: fecha,
+      turno_programado: dataProgramacion.turno || turno || null,
+      capacidad_limite: capacidadLimite,
+      tipo_unidad: tipoUnidad,
+      codigo_unidad: dataProgramacion.codigo_unidad || rutaData.codigo_unidad || null,
+      link_samsara: rutaData.link_samsara || null,
+      estado: estadoProgramacion,
+      estado_programacion: estadoProgramacion,
+      cancelada: estadoProgramacion === 'cancelada',
+      motivo_cancelacion: dataProgramacion.motivo_cancelacion || null,
+      unidad_actualizada_en: dataProgramacion.unidad_actualizada_en || null,
+      asientos_ocupados: asientosOcupados,
+      asientos_reservados: asientosReservados,
+      asientos_por_empleado: asientosPorEmpleado,
+      pasajeros_ids: pasajerosIds,
+      asientos_disponibles: Math.max(capacidadLimite - asientosOcupados, 0)
+    };
+  }));
+
+  return rutas
+    .filter(Boolean)
+    .sort((a, b) => Number(a.ruta || 0) - Number(b.ruta || 0));
+}
+
+app.get('/api/rutas/programadas/rango', autorizar('rutas:ver'), async (req, res) => {
+  let desde = textoNormalizado(req.query.desde);
+  let hasta = textoNormalizado(req.query.hasta);
+  const semana = Number(req.query.semana);
+  const anio = Number(req.query.anio) || new Date().getFullYear();
+  const turno = turnoNormalizado(req.query.turno);
+
+  if (!desde && !hasta && Number.isInteger(semana) && semana > 0) {
+    const rango = obtenerRangoSemanaISO(anio, semana);
+    if (!rango) {
+      return res.status(400).json({
+        success: false,
+        message: 'La semana debe estar entre 1 y 53.'
+      });
+    }
+
+    desde = rango.desde;
+    hasta = rango.hasta;
+  }
+
+  if (!desde || !hasta) {
+    return res.status(400).json({
+      success: false,
+      message: 'Debes enviar desde/hasta (YYYY-MM-DD) o el parametro semana.'
+    });
+  }
+
+  try {
+    const progSnap = await db.collection('programacion_diaria')
+      .where('fecha', '>=', desde)
+      .where('fecha', '<=', hasta)
+      .get();
+
+    const agregadosPorRuta = new Map();
+
+    progSnap.forEach((doc) => {
+      const data = doc.data() || {};
+      if (turno && data.turno && turnoNormalizado(data.turno) !== turno) {
+        return;
+      }
+
+      const idRuta = textoNormalizado(data.id_ruta);
+      if (!idRuta) {
+        return;
+      }
+
+      const pasajerosIds = Array.isArray(data.pasajeros_ids) ? data.pasajeros_ids : [];
+      const asientosReservados = normalizarAsientosReservados(data.asientos_reservados);
+      const asientosOcupadosDato = Number(data.asientos_ocupados);
+      const asientosOcupados = Number.isFinite(asientosOcupadosDato)
+        ? asientosOcupadosDato
+        : Math.max(asientosReservados.length, pasajerosIds.length);
+      const capacidadLimite = Number(data.capacidad_limite) || 12;
+      const ocupacionPct = capacidadLimite > 0 ? (asientosOcupados / capacidadLimite) * 100 : 0;
+
+      const prev = agregadosPorRuta.get(idRuta) || {
+        dias_programados: 0,
+        pico_asientos: 0,
+        suma_ocupacion: 0,
+        pico_ocupacion_pct: 0
+      };
+
+      agregadosPorRuta.set(idRuta, {
+        dias_programados: prev.dias_programados + 1,
+        pico_asientos: Math.max(prev.pico_asientos, asientosOcupados),
+        suma_ocupacion: prev.suma_ocupacion + ocupacionPct,
+        pico_ocupacion_pct: Math.max(prev.pico_ocupacion_pct, ocupacionPct)
+      });
+    });
+
+    const rutasSnapshot = await db.collection('rutas').get();
+    const rutas = [];
+
+    rutasSnapshot.forEach((rutaDoc) => {
+      const rutaData = rutaDoc.data() || {};
+      if (!esRutaActiva(rutaData)) {
+        return;
+      }
+
+      const agg = agregadosPorRuta.get(rutaDoc.id);
+      if (!agg) {
+        return;
+      }
+
+      const capacidadLimite = Number(rutaData.capacidad_real) || 12;
+      const asientosOcupados = agg.pico_asientos;
+      const tipoUnidad = rutaData['tipo de unidad'] || null;
+      const metricas = construirMetricasOperativas({
+        tipoUnidad,
+        capacidadLimite,
+        asientosOcupados,
+        programada: true
+      });
+      const ocupacionPromedio = agg.dias_programados > 0
+        ? Number((agg.suma_ocupacion / agg.dias_programados).toFixed(2))
+        : 0;
+
+      rutas.push({
+        id: rutaDoc.id,
+        ...rutaData,
+        ...metricas,
+        porcentaje_ocupacion_max: agg.pico_ocupacion_pct,
+        ocupacion_pct: agg.pico_ocupacion_pct,
+        ocupacion_promedio_pct: ocupacionPromedio,
+        dias_programados: agg.dias_programados,
+        asientos_ocupados: asientosOcupados,
+        capacidad_limite: capacidadLimite,
+        programada: true,
+        fuente_datos: 'programacion_diaria_rango',
+        fecha_operacion: hasta,
+        semana_operacion: obtenerNumeroSemanaISO(convertirAFecha(desde) || new Date())
+      });
+    });
+
+    rutas.sort((a, b) => Number(a.ruta || 0) - Number(b.ruta || 0));
+
+    res.status(200).json({
+      success: true,
+      desde,
+      hasta,
+      semana: Number.isInteger(semana) && semana > 0 ? semana : null,
+      anio,
+      turno: turno || null,
+      cantidad: rutas.length,
+      data: rutas
+    });
+  } catch (error) {
+    console.error('Error obteniendo rutas programadas por rango:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo rutas programadas por rango.'
+    });
+  }
+});
+
 app.get('/api/rutas/programadas', autorizar('rutas:ver'), async (req, res) => {
   const fecha = textoNormalizado(req.query.fecha);
   const turno = turnoNormalizado(req.query.turno);
@@ -1135,54 +1420,175 @@ app.get('/api/rutas/programadas', autorizar('rutas:ver'), async (req, res) => {
   }
 
   try {
-    const rutasSnapshot = await db.collection('rutas').get();
-
-    const rutas = await Promise.all(rutasSnapshot.docs.map(async (rutaDoc) => {
-      const rutaData = rutaDoc.data() || {};
-      const programacion = await resolverProgramacion(fecha, rutaDoc.id, turno);
-      const dataProgramacion = programacion.data || {};
-
-      const capacidadLimite = Number(dataProgramacion.capacidad_limite) || Number(rutaData.capacidad_real) || 12;
-      const asientosReservados = normalizarAsientosReservados(dataProgramacion.asientos_reservados);
-      const asientosPorEmpleado = normalizarAsientosPorEmpleado(dataProgramacion.asientos_por_empleado);
-      const pasajerosIds = Array.isArray(dataProgramacion.pasajeros_ids) ? dataProgramacion.pasajeros_ids : [];
-      const asientosOcupadosDato = Number(dataProgramacion.asientos_ocupados);
-      const asientosOcupados = Number.isFinite(asientosOcupadosDato)
-        ? asientosOcupadosDato
-        : Math.max(asientosReservados.length, pasajerosIds.length);
-
-      return {
-        id: rutaDoc.id,
-        ...rutaData,
-        ...normalizarPeriodoRuta({ ...rutaData, fecha_programada: fecha }, convertirAFecha(fecha) || new Date()),
-        programada: Boolean(programacion.data),
-        programacion_id: programacion.docId,
-        fecha_programada: fecha,
-        turno_programado: dataProgramacion.turno || turno || null,
-        capacidad_limite: capacidadLimite,
-        asientos_ocupados: asientosOcupados,
-        asientos_reservados: asientosReservados,
-        asientos_por_empleado: asientosPorEmpleado,
-        pasajeros_ids: pasajerosIds,
-        asientos_disponibles: Math.max(capacidadLimite - asientosOcupados, 0)
-      };
-    }));
-
-    rutas.sort((a, b) => Number(a.ruta || 0) - Number(b.ruta || 0));
+    const rutasActivas = await construirListaRutasOperativas(fecha, turno);
 
     res.status(200).json({
       success: true,
       fecha,
       turno: turno || null,
-      cantidad: rutas.length,
-      cantidad_programadas: rutas.filter((ruta) => ruta.programada).length,
-      data: rutas
+      cantidad: rutasActivas.length,
+      cantidad_programadas: rutasActivas.filter((ruta) => ruta.programada).length,
+      data: rutasActivas
     });
   } catch (error) {
     console.error('Error obteniendo rutas programadas:', error.message);
     res.status(500).json({
       success: false,
       message: 'Error obteniendo rutas programadas.'
+    });
+  }
+});
+
+// ==========================================
+// ENDPOINT 1.2: Gestión de baja lógica de rutas (soft delete)
+// ==========================================
+app.get('/api/rutas/eliminacion', autorizar('rutas:eliminar'), async (_req, res) => {
+  try {
+    const rutasSnapshot = await db.collection('rutas').get();
+    const rutasOrdenadas = rutasSnapshot.docs
+      .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+      .sort((a, b) => Number(a.ruta || 0) - Number(b.ruta || 0));
+
+    const data = await Promise.all(
+      rutasOrdenadas.map(async (rutaData) => {
+        const bloqueo = await obtenerBloqueoEliminacionRuta(rutaData.id);
+
+        return {
+          id: rutaData.id,
+          ruta: rutaData.ruta ?? null,
+          zona: rutaData.zona || rutaData.nombre || null,
+          tipo_unidad: rutaData['tipo de unidad'] || null,
+          activa: esRutaActiva(rutaData),
+          eliminada_en: rutaData.eliminada_en || null,
+          puede_deshabilitar: bloqueo.puede_eliminar && esRutaActiva(rutaData),
+          puede_habilitar: !esRutaActiva(rutaData),
+          total_pasajeros: bloqueo.total_pasajeros,
+          empleados_a_reasignar: bloqueo.empleados_a_reasignar,
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      cantidad: data.length,
+      cantidad_activas: data.filter((ruta) => ruta.activa).length,
+      cantidad_deshabilitadas: data.filter((ruta) => !ruta.activa).length,
+      data,
+    });
+  } catch (error) {
+    console.error('Error listando rutas para eliminación:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo rutas para eliminación.',
+    });
+  }
+});
+
+app.delete('/api/rutas/:id', autorizar('rutas:eliminar'), async (req, res) => {
+  const idRuta = textoNormalizado(req.params.id);
+
+  if (!idRuta) {
+    return res.status(400).json({
+      success: false,
+      message: 'Debes indicar el identificador de la ruta.',
+    });
+  }
+
+  try {
+    const bloqueo = await obtenerBloqueoEliminacionRuta(idRuta);
+
+    if (!bloqueo.ruta.activa) {
+      return res.status(409).json({
+        success: false,
+        message: 'La ruta ya está deshabilitada.',
+      });
+    }
+
+    if (!bloqueo.puede_eliminar) {
+      return res.status(409).json({
+        success: false,
+        message: `No se puede deshabilitar la ruta: tiene ${bloqueo.total_pasajeros} pasajero(s) asignados desde hoy en adelante. Reasígnalos antes de continuar.`,
+        empleados_a_reasignar: bloqueo.empleados_a_reasignar,
+      });
+    }
+
+    const rutaEncontrada = await resolverRutaPorIdentificador(idRuta);
+    await rutaEncontrada.ref.update({
+      activa: false,
+      eliminada_en: new Date(),
+      eliminada_por: req.usuario?.uid || null,
+      actualizado_en: new Date(),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Ruta deshabilitada correctamente. Puedes habilitarla nuevamente cuando la necesites.',
+      data: {
+        id: rutaEncontrada.id,
+        activa: false,
+      },
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    const message = error.message || 'Error deshabilitando la ruta.';
+
+    if (status >= 500) {
+      console.error('Error deshabilitando ruta:', message);
+    }
+
+    res.status(status).json({
+      success: false,
+      message: status >= 500 ? 'Error interno deshabilitando la ruta.' : message,
+    });
+  }
+});
+
+app.post('/api/rutas/:id/restaurar', autorizar('rutas:eliminar'), async (req, res) => {
+  const idRuta = textoNormalizado(req.params.id);
+
+  if (!idRuta) {
+    return res.status(400).json({
+      success: false,
+      message: 'Debes indicar el identificador de la ruta.',
+    });
+  }
+
+  try {
+    const rutaEncontrada = await resolverRutaPorIdentificador(idRuta);
+    if (!rutaEncontrada) {
+      return res.status(404).json({
+        success: false,
+        message: 'La ruta no existe.',
+      });
+    }
+
+    if (esRutaActiva(rutaEncontrada.data)) {
+      return res.status(409).json({
+        success: false,
+        message: 'La ruta ya está activa.',
+      });
+    }
+
+    await rutaEncontrada.ref.update({
+      activa: true,
+      restaurada_en: new Date(),
+      restaurada_por: req.usuario?.uid || null,
+      actualizado_en: new Date(),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Ruta habilitada correctamente.',
+      data: {
+        id: rutaEncontrada.id,
+        activa: true,
+      },
+    });
+  } catch (error) {
+    console.error('Error restaurando ruta:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error habilitando la ruta.',
     });
   }
 });
@@ -1348,6 +1754,13 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
       });
     }
 
+    if (!esRutaActiva(rutaEncontrada.data)) {
+      return res.status(409).json({
+        success: false,
+        message: 'La ruta seleccionada está deshabilitada. Habilítala antes de asignar pasajeros.'
+      });
+    }
+
     // Usamos una TRANSACCIÓN de Firestore para evitar condiciones de carrera (sobrecupo)
     await db.runTransaction(async (t) => {
       const empleadoQuery = db.collection('usuarios')
@@ -1397,6 +1810,10 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
         t.set(programacionRef, data, { merge: true });
       }
 
+      if (esProgramacionCancelada(data)) {
+        throw new Error('ROUTE_CANCELLED: La programación de esta ruta está cancelada para la fecha/turno seleccionado.');
+      }
+
       const pasajerosActuales = Array.isArray(data.pasajeros_ids) ? data.pasajeros_ids : [];
       const asientosReservados = normalizarAsientosReservados(data.asientos_reservados);
       const asientosPorEmpleado = normalizarAsientosPorEmpleado(data.asientos_por_empleado);
@@ -1431,6 +1848,7 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
         fecha: fechaAsignacion,
         turno: turnoAsignacion || data.turno || null,
         id_ruta: rutaEncontrada.id,
+        estado: 'activa',
         asientos_ocupados: asientosOcupados + 1,
         pasajeros_ids: nuevosPasajeros,
         asientos_reservados: nuevosAsientosReservados,
@@ -1461,6 +1879,7 @@ app.post('/api/asignar', autorizar('asignacion:crear'), async (req, res) => {
       || mensaje.startsWith('DUPLICATE_ASSIGNMENT')
       || mensaje.startsWith('SEAT_OCCUPIED')
       || mensaje.startsWith('SEAT_OUT_OF_RANGE')
+      || mensaje.startsWith('ROUTE_CANCELLED')
       ? 409
       : mensaje.startsWith('FORBIDDEN_EMPLOYEE')
         ? 403
@@ -1587,6 +2006,324 @@ app.post('/api/asignar/cancelar', autorizar('asignacion:cancelar'), async (req, 
         : mensaje.includes('no existe')
           ? 404
           : 400;
+
+    res.status(status).json({ success: false, message: mensaje });
+  }
+});
+
+app.post('/api/programacion/cancelar', autorizar('rutas:actualizar'), async (req, res) => {
+  const {
+    id_ruta,
+    ruta_origen_id,
+    ruta_destino_id,
+    fecha,
+    turno,
+    motivo
+  } = req.body || {};
+
+  const idRutaOrigen = textoNormalizado(ruta_origen_id || id_ruta);
+  const idRutaDestino = textoNormalizado(ruta_destino_id);
+  const fechaOperacion = textoNormalizado(fecha);
+  const turnoOperacion = turnoNormalizado(turno);
+  const motivoCancelacion = textoNormalizado(motivo) || 'Cancelacion operativa por bajo aforo.';
+
+  if (!idRutaOrigen || !fechaOperacion) {
+    return res.status(400).json({
+      success: false,
+      message: 'id_ruta/ruta_origen_id y fecha son requeridos.'
+    });
+  }
+
+  if (idRutaDestino && idRutaOrigen === idRutaDestino) {
+    return res.status(400).json({
+      success: false,
+      message: 'La ruta origen y destino deben ser diferentes.'
+    });
+  }
+
+  try {
+    const rutaOrigen = await resolverRutaPorIdentificador(idRutaOrigen);
+    if (!rutaOrigen) {
+      return res.status(404).json({
+        success: false,
+        message: 'La ruta origen no existe.'
+      });
+    }
+
+    const rutaDestino = idRutaDestino
+      ? await resolverRutaPorIdentificador(idRutaDestino)
+      : null;
+
+    if (idRutaDestino && !rutaDestino) {
+      return res.status(404).json({
+        success: false,
+        message: 'La ruta destino no existe.'
+      });
+    }
+
+    let resultado = null;
+
+    await db.runTransaction(async (t) => {
+      const programacionOrigen = await resolverProgramacion(fechaOperacion, rutaOrigen.id, turnoOperacion, t);
+      let dataOrigen = programacionOrigen.data;
+
+      if (!dataOrigen) {
+        dataOrigen = construirProgramacionBase({
+          fecha: fechaOperacion,
+          idRuta: rutaOrigen.id,
+          turno: turnoOperacion,
+          rutaData: rutaOrigen.data,
+          uidCreador: req.usuario.uid
+        });
+      }
+
+      const pasajerosOrigen = [...new Set(
+        (Array.isArray(dataOrigen.pasajeros_ids) ? dataOrigen.pasajeros_ids : [])
+          .map((id) => textoNormalizado(id))
+          .filter(Boolean)
+      )];
+      const asientosOrigen = normalizarAsientosReservados(dataOrigen.asientos_reservados);
+      const asientosPorEmpleadoOrigen = normalizarAsientosPorEmpleado(dataOrigen.asientos_por_empleado);
+      const detalleReasignacion = [];
+
+      if (pasajerosOrigen.length && !rutaDestino) {
+        throw new Error('TARGET_ROUTE_REQUIRED: La ruta tiene pasajeros y requiere ruta destino para reasignacion.');
+      }
+
+      if (rutaDestino) {
+        const programacionDestino = await resolverProgramacion(fechaOperacion, rutaDestino.id, turnoOperacion, t);
+        let dataDestino = programacionDestino.data;
+
+        if (!dataDestino) {
+          dataDestino = construirProgramacionBase({
+            fecha: fechaOperacion,
+            idRuta: rutaDestino.id,
+            turno: turnoOperacion,
+            rutaData: rutaDestino.data,
+            uidCreador: req.usuario.uid
+          });
+          t.set(programacionDestino.docRef, dataDestino, { merge: true });
+        }
+
+        if (esProgramacionCancelada(dataDestino)) {
+          throw new Error('TARGET_ROUTE_CANCELLED: La ruta destino esta cancelada para esa fecha/turno.');
+        }
+
+        const pasajerosDestino = [...new Set(
+          (Array.isArray(dataDestino.pasajeros_ids) ? dataDestino.pasajeros_ids : [])
+            .map((id) => textoNormalizado(id))
+            .filter(Boolean)
+        )];
+        const asientosDestino = normalizarAsientosReservados(dataDestino.asientos_reservados);
+        const asientosPorEmpleadoDestino = normalizarAsientosPorEmpleado(dataDestino.asientos_por_empleado);
+
+        const duplicadosDestino = pasajerosOrigen.filter((idEmpleado) => pasajerosDestino.includes(idEmpleado));
+        if (duplicadosDestino.length) {
+          throw new Error(`DUPLICATE_TARGET_ASSIGNMENT: Ya asignados en destino: ${duplicadosDestino.join(', ')}`);
+        }
+
+        const capacidadDestino = Number(dataDestino.capacidad_limite) || Number(rutaDestino.data.capacidad_real) || 12;
+        const ocupacionDestinoActual = Math.max(pasajerosDestino.length, asientosDestino.length);
+        if (ocupacionDestinoActual + pasajerosOrigen.length > capacidadDestino) {
+          throw new Error('TARGET_CAPACITY_EXCEEDED: La ruta destino no tiene capacidad para recibir a todos los pasajeros.');
+        }
+
+        const asientosDestinoSet = asientosOcupadosComoSet(asientosDestino, asientosPorEmpleadoDestino);
+        const pasajerosDestinoFinal = [...pasajerosDestino];
+        const asientosDestinoFinal = [...asientosDestino];
+        const mapaDestinoFinal = { ...asientosPorEmpleadoDestino };
+
+        pasajerosOrigen.forEach((idEmpleado) => {
+          const asientoOrigen = Number(asientosPorEmpleadoOrigen[idEmpleado]);
+          const asientoDestino = Number.isInteger(asientoOrigen)
+            && asientoOrigen > 0
+            && asientoOrigen <= capacidadDestino
+            && !asientosDestinoSet.has(asientoOrigen)
+            ? asientoOrigen
+            : siguienteAsientoDisponible(asientosDestinoSet, capacidadDestino);
+
+          asientosDestinoSet.add(asientoDestino);
+          pasajerosDestinoFinal.push(idEmpleado);
+          asientosDestinoFinal.push(asientoDestino);
+          mapaDestinoFinal[idEmpleado] = asientoDestino;
+          detalleReasignacion.push({
+            id_empleado: idEmpleado,
+            asiento_origen: Number.isInteger(asientoOrigen) ? asientoOrigen : null,
+            asiento_destino: asientoDestino
+          });
+        });
+
+        t.set(programacionDestino.docRef, {
+          fecha: fechaOperacion,
+          turno: turnoOperacion || dataDestino.turno || null,
+          id_ruta: rutaDestino.id,
+          estado: 'activa',
+          pasajeros_ids: pasajerosDestinoFinal,
+          asientos_reservados: normalizarAsientosReservados(asientosDestinoFinal),
+          asientos_por_empleado: mapaDestinoFinal,
+          asientos_ocupados: Math.max(pasajerosDestinoFinal.length, asientosDestinoFinal.length),
+          actualizado_en: new Date(),
+          actualizado_por: req.usuario.uid
+        }, { merge: true });
+      }
+
+      t.set(programacionOrigen.docRef, {
+        fecha: fechaOperacion,
+        turno: turnoOperacion || dataOrigen.turno || null,
+        id_ruta: rutaOrigen.id,
+        estado: 'cancelada',
+        pasajeros_ids: [],
+        asientos_reservados: [],
+        asientos_por_empleado: {},
+        asientos_ocupados: 0,
+        motivo_cancelacion: motivoCancelacion,
+        cancelada_en: new Date(),
+        cancelada_por: req.usuario.uid,
+        actualizado_en: new Date(),
+        actualizado_por: req.usuario.uid
+      }, { merge: true });
+
+      resultado = {
+        id_ruta: rutaOrigen.id,
+        ruta_destino_id: rutaDestino?.id || null,
+        fecha: fechaOperacion,
+        turno: turnoOperacion || null,
+        estado: 'cancelada',
+        empleados_reasignados: detalleReasignacion.length,
+        detalle_reasignacion: detalleReasignacion
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Programacion cancelada correctamente.',
+      data: resultado
+    });
+  } catch (error) {
+    const mensaje = String(error?.message || 'No fue posible cancelar la programacion.');
+    const status = mensaje.startsWith('TARGET_ROUTE_REQUIRED')
+      || mensaje.startsWith('TARGET_CAPACITY_EXCEEDED')
+      || mensaje.startsWith('DUPLICATE_TARGET_ASSIGNMENT')
+      || mensaje.startsWith('TARGET_ROUTE_CANCELLED')
+      ? 409
+      : 400;
+
+    res.status(status).json({ success: false, message: mensaje });
+  }
+});
+
+app.patch('/api/programacion/unidad', autorizar('rutas:actualizar'), async (req, res) => {
+  const {
+    id_ruta,
+    ruta_id,
+    fecha,
+    turno,
+    tipo_unidad,
+    capacidad_limite,
+    codigo_unidad,
+    motivo
+  } = req.body || {};
+
+  const idRuta = textoNormalizado(id_ruta || ruta_id);
+  const fechaOperacion = textoNormalizado(fecha);
+  const turnoOperacion = turnoNormalizado(turno);
+  const tipoUnidad = textoNormalizado(tipo_unidad);
+  const codigoUnidad = textoNormalizado(codigo_unidad);
+  const capacidadNueva = Number(capacidad_limite);
+
+  if (!idRuta || !fechaOperacion || !tipoUnidad || !Number.isInteger(capacidadNueva) || capacidadNueva <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'id_ruta, fecha, tipo_unidad y capacidad_limite valida son requeridos.'
+    });
+  }
+
+  try {
+    const rutaEncontrada = await resolverRutaPorIdentificador(idRuta);
+    if (!rutaEncontrada) {
+      return res.status(404).json({
+        success: false,
+        message: 'La ruta seleccionada no existe.'
+      });
+    }
+
+    let resultado = null;
+
+    await db.runTransaction(async (t) => {
+      const programacion = await resolverProgramacion(fechaOperacion, rutaEncontrada.id, turnoOperacion, t);
+      let data = programacion.data;
+
+      if (!data) {
+        data = construirProgramacionBase({
+          fecha: fechaOperacion,
+          idRuta: rutaEncontrada.id,
+          turno: turnoOperacion,
+          rutaData: rutaEncontrada.data,
+          uidCreador: req.usuario.uid
+        });
+        t.set(programacion.docRef, data, { merge: true });
+      }
+
+      if (esProgramacionCancelada(data)) {
+        throw new Error('ROUTE_CANCELLED: No se puede cambiar la unidad de una programacion cancelada.');
+      }
+
+      const pasajerosActuales = Array.isArray(data.pasajeros_ids) ? data.pasajeros_ids : [];
+      const asientosReservados = normalizarAsientosReservados(data.asientos_reservados);
+      const asientosOcupadosDato = Number(data.asientos_ocupados);
+      const ocupacionActual = Number.isFinite(asientosOcupadosDato)
+        ? asientosOcupadosDato
+        : Math.max(pasajerosActuales.length, asientosReservados.length);
+
+      if (capacidadNueva < ocupacionActual) {
+        throw new Error('UNIT_CAPACITY_TOO_SMALL: La nueva unidad no tiene capacidad para los pasajeros actuales.');
+      }
+
+      const asientosFueraRango = asientosReservados.filter((asiento) => asiento > capacidadNueva);
+      if (asientosFueraRango.length) {
+        throw new Error(`SEAT_OUT_OF_RANGE: Hay asientos ocupados fuera de la nueva capacidad: ${asientosFueraRango.join(', ')}`);
+      }
+
+      t.set(programacion.docRef, {
+        fecha: fechaOperacion,
+        turno: turnoOperacion || data.turno || null,
+        id_ruta: rutaEncontrada.id,
+        estado: 'activa',
+        tipo_unidad: tipoUnidad,
+        capacidad_limite: capacidadNueva,
+        codigo_unidad: codigoUnidad || data.codigo_unidad || rutaEncontrada.data.codigo_unidad || null,
+        motivo_cambio_unidad: textoNormalizado(motivo) || null,
+        unidad_actualizada_en: new Date(),
+        unidad_actualizada_por: req.usuario.uid,
+        actualizado_en: new Date(),
+        actualizado_por: req.usuario.uid
+      }, { merge: true });
+
+      resultado = {
+        id_ruta: rutaEncontrada.id,
+        fecha: fechaOperacion,
+        turno: turnoOperacion || null,
+        estado: 'activa',
+        tipo_unidad: tipoUnidad,
+        capacidad_limite: capacidadNueva,
+        codigo_unidad: codigoUnidad || null,
+        asientos_ocupados: ocupacionActual,
+        asientos_disponibles: Math.max(capacidadNueva - ocupacionActual, 0)
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Unidad actualizada correctamente.',
+      data: resultado
+    });
+  } catch (error) {
+    const mensaje = String(error?.message || 'No fue posible actualizar la unidad.');
+    const status = mensaje.startsWith('UNIT_CAPACITY_TOO_SMALL')
+      || mensaje.startsWith('SEAT_OUT_OF_RANGE')
+      || mensaje.startsWith('ROUTE_CANCELLED')
+      ? 409
+      : 400;
 
     res.status(status).json({ success: false, message: mensaje });
   }
@@ -1744,17 +2481,15 @@ app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res)
   let rutas = [];
 
   try {
-    // 1. Extraemos TODAS las rutas de Firebase
-    const snapshot = await db.collection('rutas').get();
-    snapshot.forEach((doc) => rutas.push({ id: doc.id, ...doc.data() }));
+    const fechaConsulta = textoNormalizado(req.query.fecha) || fechaISOHoy();
+    const turnoConsulta = turnoNormalizado(req.query.turno);
+    rutas = await construirListaRutasOperativas(fechaConsulta, turnoConsulta);
 
-    // 🔥 OPTIMIZACIÓN CRÍTICA: Reducimos drásticamente el tamaño del JSON enviado a OpenAI.
-    // Enviando solo lo esencial, evitamos saturar los tokens y provocamos que la IA responda en < 2s.
-    const rutasOptimizadas = rutas.map(r => ({
+    const rutasOptimizadas = rutas.map((r) => ({
       ruta_id: r.id,
       nombre: r.zona || r.nombre || `Ruta ${r.ruta}`,
-      ocupacion_pct: r.porcentaje_ocupacion_max,
-      pasajeros: r.max_pasajeros_dia,
+      ocupacion_pct: r.ocupacion_pct ?? r.porcentaje_ocupacion_max,
+      pasajeros: r.asientos_ocupados ?? r.max_pasajeros_dia,
       unidad: r['tipo de unidad'] || r.tipo_unidad
     }));
 
@@ -1774,12 +2509,16 @@ app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res)
       Actua como un Analista Senior de Logistica e IA para ILPEA. Genera "Insights de Accion" basados en metricas actuales y aprendizaje historico.
       
       REGLAS:
-      1. Prioridad ALTA: Rutas con ocupación < 40%.
-      2. Prioridad MEDIA: Autobuses con <= 12 pasajeros (Sugerir Van).
-      3. Considera contexto de las ultimas 4 semanas y decisiones recientes del administrador.
+      1. Si la ruta no conviene operarla por ocupación < 40% y existe posibilidad de mover pasajeros, usa tipo_accion "cancelar_reasignar".
+      2. Si la ruta si conviene operarla pero el vehículo está sobredimensionado, usa tipo_accion "cambiar_unidad".
+      3. Prioridad ALTA: cancelar y reasignar por ocupación < 40%.
+      4. Prioridad MEDIA: autobuses con <= 12 pasajeros para cambiar a Van.
+      5. Considera contexto de las ultimas 4 semanas y decisiones recientes del administrador.
       
       SALIDA ESTRICTA: Devuelve UNICAMENTE un objeto JSON con propiedad "insights".
-      Cada insight debe incluir: "recomendacion_id", "titulo", "descripcion", "prioridad" (alta/media/baja), "ruta_id", "prob_cancelacion" (0 a 1 o null), "ruta_alternativa_sugerida" (string o null).
+      Cada insight debe incluir: "recomendacion_id", "titulo", "descripcion", "prioridad" (alta/media/baja), "ruta_id", "tipo_accion" ("cancelar_reasignar" o "cambiar_unidad"), "prob_cancelacion" (0 a 1 o null), "ruta_alternativa_sugerida" (string o null), "tipo_unidad_sugerida" (string o null), "capacidad_sugerida" (numero o null), "codigo_unidad_sugerido" (string o null).
+      Para tipo_accion "cambiar_unidad", llena tipo_unidad_sugerida y capacidad_sugerida.
+      Para tipo_accion "cancelar_reasignar", llena ruta_alternativa_sugerida si hay una ruta viable.
       No incluyas texto extra fuera del JSON.
     `;
 
@@ -1967,7 +2706,8 @@ app.post('/api/ai/ejecutar-plan', autorizar('asignacion:crear'), async (req, res
     turno,
     empleados_ids,
     recomendacion_id,
-    motivo
+    motivo,
+    cancelar_origen
   } = req.body || {};
 
   const rutaOrigenSolicitada = textoNormalizado(ruta_origen_id);
@@ -2125,12 +2865,21 @@ app.post('/api/ai/ejecutar-plan', autorizar('asignacion:crear'), async (req, res
       });
 
       const asientosOrigenFinal = asientosOrigen.filter((asiento) => !asientosRemoverOrigen.has(asiento));
+      const debeCancelarOrigen = cancelar_origen === true;
+
+      if (debeCancelarOrigen && pasajerosOrigenFinal.length) {
+        throw new Error('CANNOT_CANCEL_NON_EMPTY_ROUTE: Para cancelar la ruta origen se deben mover todos los empleados asignados.');
+      }
 
       t.set(programacionOrigen.docRef, {
+        estado: debeCancelarOrigen ? 'cancelada' : obtenerEstadoProgramacion(dataOrigen),
         pasajeros_ids: pasajerosOrigenFinal,
         asientos_reservados: asientosOrigenFinal,
         asientos_por_empleado: mapaOrigenFinal,
         asientos_ocupados: Math.max(pasajerosOrigenFinal.length, asientosOrigenFinal.length),
+        motivo_cancelacion: debeCancelarOrigen ? (textoNormalizado(motivo) || 'Cancelacion operativa por plan IA.') : dataOrigen.motivo_cancelacion || null,
+        cancelada_en: debeCancelarOrigen ? new Date() : dataOrigen.cancelada_en || null,
+        cancelada_por: debeCancelarOrigen ? req.usuario.uid : dataOrigen.cancelada_por || null,
         actualizado_en: new Date(),
         actualizado_por: req.usuario.uid
       }, { merge: true });
@@ -2180,7 +2929,8 @@ app.post('/api/ai/ejecutar-plan', autorizar('asignacion:crear'), async (req, res
           plan_id: planRef.id,
           empleados_movidos: empleadosMover.length,
           fecha: fechaPlan,
-          turno: turnoPlan || null
+          turno: turnoPlan || null,
+          cancelar_origen: debeCancelarOrigen
         },
         creado_por: req.usuario.uid,
         creado_por_rol: req.usuario.rol,
@@ -2221,6 +2971,7 @@ app.post('/api/ai/ejecutar-plan', autorizar('asignacion:crear'), async (req, res
         ruta_destino_id: rutaDestino.id,
         fecha: fechaPlan,
         turno: turnoPlan || null,
+        estado_origen: debeCancelarOrigen ? 'cancelada' : 'activa',
         cantidad_empleados_movidos: empleadosMover.length,
         detalle_reasignacion: detalleReasignacion
       };
@@ -2240,6 +2991,7 @@ app.post('/api/ai/ejecutar-plan', autorizar('asignacion:crear'), async (req, res
         || mensaje.startsWith('DUPLICATE_TARGET_ASSIGNMENT')
         || mensaje.startsWith('EMPTY_SOURCE_ROUTE')
         || mensaje.startsWith('EMPTY_MOVE_SET')
+      || mensaje.startsWith('CANNOT_CANCEL_NON_EMPTY_ROUTE')
         ? 409
         : 400;
 
@@ -2293,21 +3045,47 @@ app.get('/api/ai/planes-ejecutados', autorizar('insights:ver'), async (req, res)
   }
 
   try {
-    let query = db.collection(COLECCION_PLANES_IA);
+    const tieneFiltroFecha = Boolean(fechaDesde || fechaHasta);
+    let snapshot;
 
-    if (fechaDesde) {
-      query = query.where('fecha', '>=', fechaDesde);
+    if (!tieneFiltroFecha) {
+      try {
+        snapshot = await db
+          .collection(COLECCION_PLANES_IA)
+          .orderBy('ejecutado_en', 'desc')
+          .limit(limit)
+          .get();
+      } catch (errorOrdenEjecutado) {
+        try {
+          snapshot = await db
+            .collection(COLECCION_PLANES_IA)
+            .orderBy('fecha', 'desc')
+            .limit(limit)
+            .get();
+        } catch (errorOrdenFecha) {
+          snapshot = await db.collection(COLECCION_PLANES_IA).limit(limit).get();
+        }
+      }
+    } else {
+      let query = db.collection(COLECCION_PLANES_IA);
+
+      if (fechaDesde) {
+        query = query.where('fecha', '>=', fechaDesde);
+      }
+
+      if (fechaHasta) {
+        query = query.where('fecha', '<=', fechaHasta);
+      }
+
+      try {
+        snapshot = await query.orderBy('fecha', 'desc').limit(limit).get();
+      } catch (errorOrdenFechaFiltrada) {
+        snapshot = await query.limit(Math.min(limit * 3, 200)).get();
+      }
     }
 
-    if (fechaHasta) {
-      query = query.where('fecha', '<=', fechaHasta);
-    }
-
-    query = query.orderBy('fecha', 'desc').limit(limit);
-
-    const snapshot = await query.get();
-
-    const planes = snapshot.docs.map((doc) => {
+    const etiquetasCache = new Map();
+    const planesBase = snapshot.docs.map((doc) => {
       const data = doc.data() || {};
       const cantidadEmpleadosMovidos = Number(data.cantidad_empleados_movidos)
         || (Array.isArray(data.empleados_movidos) ? data.empleados_movidos.length : 0);
@@ -2329,6 +3107,22 @@ app.get('/api/ai/planes-ejecutados', autorizar('insights:ver'), async (req, res)
         semana_key: textoNormalizado(data.semana_key) || null
       };
     });
+
+    let planesOrdenados = [...planesBase];
+    if (tieneFiltroFecha) {
+      planesOrdenados.sort((planA, planB) => {
+        const ejecutadoA = planA.ejecutado_en || `${planA.fecha || ''}T00:00:00.000Z`;
+        const ejecutadoB = planB.ejecutado_en || `${planB.fecha || ''}T00:00:00.000Z`;
+        return ejecutadoB.localeCompare(ejecutadoA);
+      });
+      planesOrdenados = planesOrdenados.slice(0, limit);
+    }
+
+    const planes = await Promise.all(planesOrdenados.map(async (plan) => ({
+      ...plan,
+      ruta_origen_label: await obtenerEtiquetaRutaPorId(plan.ruta_origen_id, etiquetasCache),
+      ruta_destino_label: await obtenerEtiquetaRutaPorId(plan.ruta_destino_id, etiquetasCache)
+    })));
 
     const planesFiltrados = estadoImpacto
       ? planes.filter((plan) => plan.estado_impacto === estadoImpacto)
@@ -2438,7 +3232,7 @@ app.get('/api/usuarios', autorizar('usuarios:ver'), async (req, res) => {
         email: data.email,
         nombre: data.nombre,
         rol: data.rol,
-        activo: data.activo,
+        activo: data.activo !== false,
         creado_en: data.creado_en
       });
     });
@@ -2531,6 +3325,14 @@ app.post('/api/empleados', autorizar('empleados:crear'), async (req, res) => {
   try {
     const idEmpleadoManual = String(id_empleado || '').trim();
     const passwordManual = String(password || '').trim();
+
+    if (idEmpleadoManual && await existeIdEmpleado(idEmpleadoManual)) {
+      return res.status(409).json({
+        success: false,
+        message: 'Ya existe un empleado con ese ID.'
+      });
+    }
+
     const idEmpleadoFinal = idEmpleadoManual || await generarIdEmpleadoUnico();
     const passwordFinal = passwordManual || generarPasswordTemporal();
 
@@ -2571,8 +3373,10 @@ app.post('/api/empleados', autorizar('empleados:crear'), async (req, res) => {
       success: true,
       message: 'Empleado creado exitosamente. Las credenciales se muestran abajo y el correo se envia en segundo plano.',
       credenciales_generadas: {
+        email: String(email).trim(),
         id_empleado: idEmpleadoFinal,
-        password_temporal: passwordManual ? null : passwordFinal
+        password_temporal: passwordManual ? null : passwordFinal,
+        password_definida_manualmente: Boolean(passwordManual)
       },
       notificacion_email: NOTIFICACION_CORREO_EN_PROCESO,
       usuario: {
@@ -2722,42 +3526,17 @@ app.delete('/api/empleados/:uid', autorizar('empleados:eliminar'), async (req, r
   const { uid } = req.params;
 
   try {
-    const ref = db.collection('usuarios').doc(uid);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Empleado no encontrado.'
-      });
-    }
-
-    const data = snapshot.data();
-    if (data.rol !== ROLES.EMPLEADO) {
-      return res.status(403).json({
-        success: false,
-        message: 'Solo se pueden eliminar usuarios con rol EMPLEADO.'
-      });
-    }
-
-    if (!puedeGestionarEmpleado(req.usuario, data)) {
-      return res.status(403).json({
-        success: false,
-        message: 'No puedes eliminar empleados que no te pertenecen.'
-      });
-    }
-
-    await ref.update({
-      activo: false,
-      eliminado_por: req.usuario.uid,
-      eliminado_en: new Date()
+    await eliminarUsuarioDefinitivo({
+      uid,
+      rolEsperado: ROLES.EMPLEADO,
+      usuarioSolicitante: req.usuario,
+      validarPermisoEmpleado: true,
+      invalidarCacheUsuario,
     });
-
-    await admin.auth().deleteUser(uid);
 
     res.json({
       success: true,
-      message: 'Empleado eliminado exitosamente.'
+      message: 'Empleado eliminado definitivamente.'
     });
   } catch (error) {
     console.error('Error eliminando empleado:', error.message);
@@ -2769,7 +3548,7 @@ app.delete('/api/empleados/:uid', autorizar('empleados:eliminar'), async (req, r
       });
     }
 
-    res.status(400).json({
+    res.status(error.status || 400).json({
       success: false,
       message: error.message
     });
@@ -2850,7 +3629,9 @@ app.post('/api/jefes', autorizar('jefes:crear'), async (req, res) => {
       success: true,
       message: 'Jefe creado exitosamente. Las credenciales se muestran abajo y el correo se envia en segundo plano.',
       credenciales_generadas: {
-        password_temporal: passwordManual ? null : passwordFinal
+        email: String(email).trim(),
+        password_temporal: passwordManual ? null : passwordFinal,
+        password_definida_manualmente: Boolean(passwordManual)
       },
       notificacion_email: NOTIFICACION_CORREO_EN_PROCESO,
       usuario: {
@@ -2973,37 +3754,15 @@ app.delete('/api/jefes/:uid', autorizar('jefes:eliminar'), async (req, res) => {
   const { uid } = req.params;
 
   try {
-    const ref = db.collection('usuarios').doc(uid);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Jefe no encontrado.'
-      });
-    }
-
-    const data = snapshot.data();
-    if (data.rol !== ROLES.JEFE) {
-      return res.status(403).json({
-        success: false,
-        message: 'Solo se pueden eliminar usuarios con rol JEFE.'
-      });
-    }
-
-    // Soft delete
-    await ref.update({
-      activo: false,
-      eliminado_por: req.usuario.uid,
-      eliminado_en: new Date()
+    await eliminarUsuarioDefinitivo({
+      uid,
+      rolEsperado: ROLES.JEFE,
+      invalidarCacheUsuario,
     });
-
-    // Eliminar de Firebase Auth
-    await admin.auth().deleteUser(uid);
 
     res.json({
       success: true,
-      message: 'Jefe eliminado exitosamente.'
+      message: 'Jefe eliminado definitivamente.'
     });
   } catch (error) {
     console.error('Error eliminando jefe:', error.message);
@@ -3015,7 +3774,7 @@ app.delete('/api/jefes/:uid', autorizar('jefes:eliminar'), async (req, res) => {
       });
     }
 
-    res.status(400).json({
+    res.status(error.status || 400).json({
       success: false,
       message: error.message
     });
@@ -3063,23 +3822,47 @@ app.delete('/api/usuarios/:uid', autorizar('usuarios:eliminar'), async (req, res
   const { uid } = req.params;
 
   try {
-    // Marcar como inactivo en Firestore
-    await db.collection('usuarios').doc(uid).update({
-      activo: false,
-      eliminado_por: req.usuario.uid,
-      eliminado_en: new Date()
-    });
+    const ref = db.collection('usuarios').doc(uid);
+    const snapshot = await ref.get();
 
-    // Opcionalmente, también eliminarlo de Firebase Auth
-    await admin.auth().deleteUser(uid);
+    if (!snapshot.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado.'
+      });
+    }
+
+    const data = snapshot.data() || {};
+    const opciones = {
+      uid,
+      invalidarCacheUsuario,
+    };
+
+    if (data.rol === ROLES.EMPLEADO) {
+      opciones.rolEsperado = ROLES.EMPLEADO;
+      opciones.validarPermisoEmpleado = true;
+      opciones.usuarioSolicitante = req.usuario;
+    } else if (data.rol === ROLES.JEFE) {
+      opciones.rolEsperado = ROLES.JEFE;
+    }
+
+    await eliminarUsuarioDefinitivo(opciones);
 
     res.json({
       success: true,
-      message: 'Usuario eliminado exitosamente.'
+      message: 'Usuario eliminado definitivamente.'
     });
   } catch (error) {
     console.error('Error eliminando usuario:', error.message);
-    res.status(400).json({
+
+    if (error.code === 'auth/user-not-found') {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado en Firebase Auth.'
+      });
+    }
+
+    res.status(error.status || 400).json({
       success: false,
       message: error.message
     });

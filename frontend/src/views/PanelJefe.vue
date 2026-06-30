@@ -3,24 +3,18 @@
     <AdminSidebar v-if="esAdmin" />
 
     <div class="jefe-container" :class="{ 'with-sidebar': esAdmin }">
-    <header class="header">
+    <header v-if="!esAdmin" class="header">
       <div class="header-left">
-        <button
-          v-if="mostrarBotonVolverDashboard"
-          type="button"
-          class="btn-back"
-          @click="volverADashboard"
-          aria-label="Volver al dashboard"
-          title="Volver al dashboard"
-        >
-          <AppIcon name="chevron-left" :size="18" />
-        </button>
         <div class="brand">ILPEA <span>LOGÍSTICA</span></div>
       </div>
       <div class="user-info">
-        <span>{{ tituloPanel }}</span>
         <button @click="salir" class="btn-logout">Salir</button>
       </div>
+    </header>
+
+    <header v-else class="content-header">
+      <h2>Asignaciones</h2>
+      <p class="page-subtitle">{{ subtituloPanel }}</p>
     </header>
 
     <main class="dashboard-grid" ref="seccionAsignacion">
@@ -42,7 +36,7 @@
             </div>
             <div class="seats-grid">
               <div 
-                v-for="n in (rutaSeleccionada?.capacidad_real || 30)" 
+                v-for="n in capacidadRutaSeleccionada" 
                 :key="n" 
                 class="seat-wrapper"
                 :class="{ 'aisle-space': n % 4 === 2 }" 
@@ -59,7 +53,7 @@
           </div>
           
           <div class="stats-footer" v-if="rutaSeleccionada">
-            <p>Capacidad: {{ rutaSeleccionada.capacidad_real }} | Libres: {{ asientosLibres }}</p>
+            <p>Capacidad: {{ capacidadRutaSeleccionada }} | Libres: {{ asientosLibres }}</p>
           </div>
         </div>
       </section>
@@ -73,14 +67,15 @@
           
           <div class="form-group">
             <label>Empleado asignado</label>
-            <select v-model="registro.idEmpleado" class="minimal-select" :disabled="!empleadosAsignados.length || cargandoContexto">
-              <option value="" disabled>
-                {{ empleadosAsignados.length ? 'Selecciona un empleado' : 'Sin empleados disponibles' }}
-              </option>
-              <option v-for="empleado in empleadosAsignados" :key="empleado.uid" :value="empleado.id_empleado">
-                {{ empleado.id_empleado }} - {{ empleado.nombre }}
-              </option>
-            </select>
+            <AppAutocomplete
+              v-model="registro.idEmpleado"
+              mode="select"
+              variant="field"
+              class="autocomplete-field"
+              :options="opcionesEmpleados"
+              :disabled="!empleadosAsignados.length || cargandoContexto"
+              placeholder="Buscar empleado por ID, nombre o email..."
+            />
             <p v-if="empleadoSeleccionado" class="helper-note">{{ empleadoSeleccionado.email }}</p>
             <p v-if="empleadoYaAsignado" class="status-error ui-alert-inline">
               <AppIcon name="alert-triangle" :size="14" />
@@ -92,14 +87,15 @@
 
           <div class="form-group">
             <label>Ruta Activa</label>
-            <select v-model="registro.ruta" class="minimal-select" :disabled="!rutasParaTurno.length || cargandoContexto">
-              <option v-if="!rutasParaTurno.length" value="" disabled>
-                Sin rutas disponibles
-              </option>
-              <option v-for="r in rutasParaTurno" :key="r.id" :value="r.id">
-                {{ construirEtiquetaRuta(r) }}
-              </option>
-            </select>
+            <AppAutocomplete
+              v-model="registro.ruta"
+              mode="select"
+              variant="field"
+              class="autocomplete-field"
+              :options="opcionesRutas"
+              :disabled="!rutasParaTurno.length || cargandoContexto"
+              placeholder="Buscar ruta por número o zona..."
+            />
             <p class="helper-note">{{ resumenRutasTurno }}</p>
             <p v-if="rutaRecomendada" class="helper-note">
               Recomendación: {{ construirEtiquetaRuta(rutaRecomendada) }}
@@ -140,7 +136,11 @@
           <p v-if="mensaje" class="status-ok">{{ mensaje }}</p>
           <p v-if="error" class="status-error">{{ error }}</p>
           
-          <button class="btn-report">Generar Reporte de Turno</button>
+          <button class="btn-report" type="button" :disabled="generandoReporte" @click="generarReporteTurno">
+            <AppIcon v-if="generandoReporte" name="loader-2" :size="18" spin />
+            <AppIcon v-else name="file-text" :size="18" />
+            {{ generandoReporte ? 'Generando...' : 'Generar Reporte de Turno' }}
+          </button>
         </div>
       </section>
     </main>
@@ -177,20 +177,27 @@
       </div>
     </div>
 
-    <section class="crud-section">
-      <EmpleadoCrudPanel />
-    </section>
-
     <section class="assignment-overview-section">
       <div class="section-card">
         <div class="assignment-header">
-          <h3>Asignación Actual por Empleado</h3>
-          <p class="subtitle">Vista del día {{ registro.dia }} y turno {{ TURNOS_LABEL[registro.horario] || registro.horario }}.</p>
+          <div>
+            <h3>Asignación Actual por Empleado</h3>
+            <p class="subtitle">Vista del día {{ registro.dia }} y turno {{ TURNOS_LABEL[registro.horario] || registro.horario }}.</p>
+          </div>
+          <div class="assignment-search">
+            <AppAutocomplete
+              v-model="filtroAsignaciones"
+              mode="filter"
+              variant="field"
+              :options="opcionesEmpleadosTabla"
+              placeholder="Filtrar empleados..."
+            />
+          </div>
         </div>
 
         <div v-if="cargandoContexto" class="status-info">Preparando asignaciones actuales...</div>
-        <div v-else-if="!empleadosAsignados.length" class="status-info">
-          No hay empleados activos asignados a tu turno.
+        <div v-else-if="!empleadosConAsignacionFiltrados.length" class="status-info">
+          {{ filtroAsignaciones ? 'Sin resultados para el filtro.' : 'No hay empleados activos asignados a tu turno.' }}
         </div>
         <div v-else class="assignment-table-wrap">
           <table class="assignment-table">
@@ -204,7 +211,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="fila in empleadosConAsignacion" :key="fila.uid">
+              <tr v-for="fila in empleadosConAsignacionFiltrados" :key="fila.uid">
                 <td>{{ fila.id_empleado }}</td>
                 <td>{{ fila.nombre }}</td>
                 <td>
@@ -243,11 +250,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
+import jsPDF from 'jspdf'
 import { useAuth } from '../composables/useAuth'
-import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue'
 import CopilotoChat from '../components/CopilotoChat.vue'
 import AppIcon from '../components/ui/AppIcon.vue'
+import AppAutocomplete, { type AutocompleteOption } from '../components/ui/AppAutocomplete.vue'
+import { coincideBusqueda } from '../utils/busqueda'
 import AdminSidebar from '../components/layout/AdminSidebar.vue'
 
 interface EmpleadoAsignado {
@@ -271,6 +280,8 @@ interface Ruta {
   asientos_reservados?: number[];
   asientos_por_empleado?: Record<string, number>;
   programada?: boolean;
+  estado_programacion?: string;
+  cancelada?: boolean;
 }
 
 interface ModalDesasignacionDetalle {
@@ -301,12 +312,10 @@ const TURNOS_LABEL: Record<string, string> = {
   dom_3: 'Domingo 3er',
 }
 
-const route = useRoute()
 const router = useRouter()
 const { logout, authHeaders, obtenerRol } = useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000'
 const esAdmin = computed(() => obtenerRol() === 'ADMIN')
-const mostrarBotonVolverDashboard = computed(() => esAdmin.value && route.path === '/admin/asignaciones')
 const tituloPanel = computed(() => (esAdmin.value ? 'Panel de Asignación: Administrador' : 'Panel de Asignación: Jefe de Turno'))
 const subtituloPanel = computed(() => (
   esAdmin.value
@@ -314,10 +323,6 @@ const subtituloPanel = computed(() => (
     : 'Asigna empleados de tu equipo.'
 ))
 const scopeChat = computed(() => (esAdmin.value ? 'ADMIN' : 'JEFE'))
-
-const volverADashboard = () => {
-  router.push('/admin')
-}
 
 const registro = ref({
   idEmpleado: '',
@@ -337,6 +342,7 @@ const error = ref<string | null>(null)
 const mensaje = ref<string | null>(null)
 const errorModalDesasignacion = ref<string | null>(null)
 const procesandoLiberacionEmpleado = ref<string | null>(null)
+const filtroAsignaciones = ref('')
 const modalDesasignacion = ref({
   visible: false,
   procesando: false,
@@ -357,7 +363,7 @@ const rutasProgramadas = computed(() => rutas.value.filter((ruta) => ruta.progra
 const rutasParaTurno = computed(() => {
   // Mostrar siempre todas las rutas (programadas y base) para que el Jefe
   // pueda seguir asignando empleados a nuevas rutas libremente.
-  return rutas.value
+  return rutas.value.filter((ruta) => !ruta.cancelada && ruta.estado_programacion !== 'cancelada')
 })
 
 const rutaRecomendada = computed(() => {
@@ -396,9 +402,58 @@ const empleadosConAsignacion = computed<FilaEmpleadoAsignacion[]>(() => {
   }))
 })
 
+const opcionesEmpleados = computed<AutocompleteOption[]>(() =>
+  empleadosAsignados.value.map((empleado) => ({
+    value: empleado.id_empleado,
+    label: `${empleado.id_empleado} — ${empleado.nombre}`,
+    hint: empleado.email,
+    keywords: `${empleado.id_empleado} ${empleado.nombre} ${empleado.email}`,
+  })),
+)
+
+const opcionesRutas = computed<AutocompleteOption[]>(() =>
+  rutasParaTurno.value.map((ruta) => ({
+    value: ruta.id,
+    label: construirEtiquetaRuta(ruta),
+    hint: `${ruta.asientos_disponibles ?? 0} asientos libres`,
+    keywords: `ruta ${ruta.ruta} ${ruta.zona || ''} ${ruta.nombre || ''}`,
+  })),
+)
+
+const opcionesEmpleadosTabla = computed<AutocompleteOption[]>(() =>
+  empleadosConAsignacion.value.map((fila) => ({
+    value: fila.uid,
+    label: fila.nombre,
+    hint: fila.id_empleado,
+    keywords: `${fila.nombre} ${fila.id_empleado} ${fila.email}`,
+  })),
+)
+
+const empleadosConAsignacionFiltrados = computed(() => {
+  const termino = filtroAsignaciones.value;
+  if (!termino.trim()) {
+    return empleadosConAsignacion.value;
+  }
+
+  return empleadosConAsignacion.value.filter((fila) =>
+    coincideBusqueda(
+      termino,
+      fila.nombre,
+      fila.id_empleado,
+      fila.email,
+      fila.asignacion ? construirEtiquetaRuta(fila.asignacion.ruta) : 'sin asignar',
+    ),
+  );
+});
+
 const asientosLibres = computed(() => {
   if (!rutaSeleccionada.value) return 0
   return rutaSeleccionada.value.asientos_disponibles || 0
+})
+
+const capacidadRutaSeleccionada = computed(() => {
+  if (!rutaSeleccionada.value) return 30
+  return rutaSeleccionada.value.capacidad_limite || rutaSeleccionada.value.capacidad_real || 30
 })
 
 const isFormReady = computed(() => {
@@ -448,7 +503,7 @@ function normalizarRuta(raw: any): Ruta {
     ruta: Number(raw?.ruta) || 0,
     zona: raw?.zona,
     nombre: raw?.nombre,
-    capacidad_real: Number(raw?.capacidad_real) || capacidadBase,
+    capacidad_real: capacidadBase,
     capacidad_limite: capacidadBase,
     asientos_ocupados: asientosOcupados,
     asientos_disponibles: Math.max(capacidadBase - asientosOcupados, 0),
@@ -456,6 +511,8 @@ function normalizarRuta(raw: any): Ruta {
     asientos_reservados: asientosReservados,
     asientos_por_empleado: asientosPorEmpleado,
     programada: Boolean(raw?.programada),
+    estado_programacion: String(raw?.estado_programacion || raw?.estado || 'activa').toLowerCase(),
+    cancelada: raw?.cancelada === true || String(raw?.estado_programacion || raw?.estado || '').toLowerCase() === 'cancelada',
   }
 }
 
@@ -748,6 +805,86 @@ const confirmarDesasignacion = async () => {
 }
 
 const seccionAsignacion = ref<HTMLElement | null>(null)
+const generandoReporte = ref(false)
+
+function generarReporteTurno() {
+  if (!empleadosConAsignacion.value.length) {
+    aviso.value = 'No hay empleados para incluir en el reporte.'
+    return
+  }
+
+  generandoReporte.value = true
+
+  try {
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+    const margen = 14
+    const anchoPagina = doc.internal.pageSize.getWidth()
+    const altoPagina = doc.internal.pageSize.getHeight()
+    const turnoTexto = TURNOS_LABEL[registro.value.horario] || registro.value.horario
+    let y = margen
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(15)
+    doc.text('ILPEA Transporte - Reporte de Turno', margen, y)
+    y += 8
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(10)
+    doc.text(`Fecha: ${registro.value.dia}`, margen, y)
+    doc.text(`Turno: ${turnoTexto}`, anchoPagina - margen - 60, y)
+    y += 6
+    doc.text(`Generado por: ${tituloPanel.value}`, margen, y)
+    y += 10
+
+    const colId = { titulo: 'ID Empleado', x: margen, ancho: 28 }
+    const colNombre = { titulo: 'Nombre', x: margen + 28, ancho: 52 }
+    const colRuta = { titulo: 'Ruta actual', x: margen + 80, ancho: 70 }
+    const colAsiento = { titulo: 'Asiento', x: margen + 150, ancho: 32 }
+    const columnas = [colId, colNombre, colRuta, colAsiento]
+    const anchoTabla = anchoPagina - margen * 2
+
+    const dibujarEncabezadoTabla = () => {
+      doc.setFillColor(15, 23, 42)
+      doc.rect(margen, y, anchoTabla, 8, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9)
+      columnas.forEach((columna) => doc.text(columna.titulo, columna.x + 2, y + 5.5))
+      doc.setTextColor(0, 0, 0)
+      doc.setFont('helvetica', 'normal')
+      y += 8
+    }
+
+    dibujarEncabezadoTabla()
+
+    empleadosConAsignacion.value.forEach((fila, indice) => {
+      if (y > altoPagina - margen - 10) {
+        doc.addPage()
+        y = margen
+        dibujarEncabezadoTabla()
+      }
+
+      if (indice % 2 === 0) {
+        doc.setFillColor(248, 250, 252)
+        doc.rect(margen, y, anchoTabla, 7, 'F')
+      }
+
+      const rutaTexto = fila.asignacion ? construirEtiquetaRuta(fila.asignacion.ruta) : 'Sin asignar'
+
+      doc.setFontSize(8.5)
+      doc.text(fila.id_empleado, colId.x + 2, y + 5, { maxWidth: colId.ancho - 4 })
+      doc.text(fila.nombre, colNombre.x + 2, y + 5, { maxWidth: colNombre.ancho - 4 })
+      doc.text(rutaTexto, colRuta.x + 2, y + 5, { maxWidth: colRuta.ancho - 4 })
+      doc.text(String(fila.asignacion?.asiento ?? '-'), colAsiento.x + 2, y + 5)
+
+      y += 7
+    })
+
+    doc.save(`Reporte_Turno_${registro.value.dia}_${registro.value.horario}.pdf`)
+  } finally {
+    generandoReporte.value = false
+  }
+}
 
 function prepararCambioRutaDesdeTabla(idEmpleado: string, rutaId: string | null) {
   registro.value.idEmpleado = idEmpleado
@@ -854,33 +991,35 @@ onMounted(cargarContextoInicial)
 
 <style scoped>
 /* ESTILOS RESTAURADOS - ILPEA CLEAN TECH */
-.admin-layout { display: flex; min-height: 100vh; }
+.admin-layout { display: flex; min-height: 100vh; background: #f8f9fa; }
 .jefe-container { min-height: 100vh; background: #f8fafc; font-family: 'Inter', sans-serif; color: #1e293b; }
 .jefe-container.with-sidebar { flex: 1; min-width: 0; }
 
+.content-header {
+  padding: 3rem 3rem 0;
+  margin-bottom: 0;
+}
+
+.content-header h2 {
+  margin: 0 0 0.35rem 0;
+  font-size: 1.5rem;
+  color: #1a1a1a;
+}
+
+.page-subtitle {
+  margin: 0;
+  color: var(--ilpea-gray-500);
+  font-size: 0.92rem;
+}
+
 @media (max-width: 768px) {
   .admin-layout { flex-direction: column; }
+  .content-header { padding: 1.5rem 1rem 0; }
 }
 .header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 3rem; background: #fff; border-bottom: 1px solid #e2e8f0; }
 .header-left { display: flex; align-items: center; gap: 0.75rem; }
 .brand { font-weight: 800; font-size: 1.2rem; }
 .brand span { color: #2563eb; }
-.btn-back {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  color: #0f172a;
-  font-size: 1.2rem;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: 0.2s;
-}
-.btn-back:hover { background: #f1f5f9; border-color: #94a3b8; }
 .btn-logout { background: none; border: 1px solid #ef4444; color: #ef4444; padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: 0.2s; }
 .btn-logout:hover { background: #fef2f2; }
 
@@ -944,17 +1083,73 @@ label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; mar
 .btn-confirm { width: 100%; padding: 1.1rem; background: #1e293b; color: #fff; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; transition: 0.2s; }
 .btn-confirm:hover:not(:disabled) { background: #0f172a; }
 .btn-confirm:disabled { background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }
-.btn-report { width: 100%; background: none; border: 1px solid #e2e8f0; color: #64748b; padding: 0.9rem; border-radius: 10px; margin-top: 0.8rem; cursor: pointer; font-weight: 500; }
+.btn-report {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, #107c41 0%, #0c5e31 100%);
+  border: none;
+  color: #fff;
+  padding: 0.9rem;
+  border-radius: 10px;
+  margin-top: 0.8rem;
+  cursor: pointer;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(16, 124, 65, 0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+}
+.btn-report:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(16, 124, 65, 0.4);
+}
+.btn-report:active:not(:disabled) {
+  transform: translateY(0);
+}
+.btn-report:disabled {
+  background: #e2e8f0;
+  color: #94a3b8;
+  box-shadow: none;
+  cursor: not-allowed;
+}
 .btn-secondary { background: #f8fafc; color: #334155; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0.7rem 1rem; cursor: pointer; font-weight: 600; }
-.btn-danger { background: #b91c1c; color: #fff; border: 1px solid #991b1b; border-radius: 10px; padding: 0.7rem 1rem; cursor: pointer; font-weight: 700; }
+.btn-danger {
+  background: linear-gradient(to right, #fb7185, #e11d48, #be123c);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 0.7rem 1.2rem;
+  cursor: pointer;
+  font-weight: 700;
+  box-shadow: 0 10px 20px -6px rgba(190, 18, 60, 0.45);
+  transition: background 0.3s, box-shadow 0.3s, transform 0.3s;
+}
+.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(to right, #be123c, #fb7185);
+  box-shadow: 0 10px 25px -4px rgba(239, 68, 68, 0.6);
+  transform: scale(1.05);
+}
 .btn-danger:disabled, .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
 .stats-footer { margin-top: 1.5rem; text-align: center; font-size: 0.85rem; color: #94a3b8; }
 .status-ok { margin-top: 1rem; color: #166534; font-weight: 600; }
 .status-error { margin-top: 1rem; color: #b91c1c; font-weight: 600; }
-.crud-section { padding: 0 3rem 2.5rem; }
 
 .assignment-overview-section { padding: 0 3rem 2.5rem; }
-.assignment-header { margin-bottom: 1rem; }
+.assignment-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.assignment-search {
+  width: min(100%, 320px);
+}
+.form-group :deep(.app-autocomplete--field .app-autocomplete__control) {
+  margin-top: 0;
+}
 .assignment-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
 .assignment-table {
   width: 100%;
@@ -992,11 +1187,17 @@ label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; mar
 }
 .btn-mini:hover { background: #1e293b; }
 .btn-mini.danger {
-  background: #fff;
-  color: #b91c1c;
-  border-color: #fecaca;
+  background: linear-gradient(to right, #fb7185, #e11d48, #be123c);
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 10px -2px rgba(190, 18, 60, 0.4);
+  transition: background 0.3s, box-shadow 0.3s, transform 0.3s;
 }
-.btn-mini.danger:hover { background: #fef2f2; }
+.btn-mini.danger:hover:not(:disabled) {
+  background: linear-gradient(to right, #be123c, #fb7185);
+  box-shadow: 0 6px 16px -2px rgba(239, 68, 68, 0.55);
+  transform: scale(1.05);
+}
 
 .modal-overlay {
   position: fixed;
@@ -1067,7 +1268,6 @@ label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; mar
     padding: 1.5rem 1rem;
     gap: 1.5rem;
   }
-  .crud-section,
   .assignment-overview-section {
     padding: 0 1rem 1.5rem;
   }

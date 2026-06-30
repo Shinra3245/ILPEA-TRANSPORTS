@@ -79,25 +79,43 @@ const chartData = computed(() => ({
   ]
 }));
 
+const etiquetaAbajo = (ctx: { dataset: { data: unknown[] }; dataIndex: number }) => {
+  const value = Number(ctx.dataset.data[ctx.dataIndex]);
+  return value <= 10;
+};
+
 const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
+  layout: {
+    padding: {
+      top: 8,
+      left: 8,
+      right: 8
+    }
+  },
   plugins: {
     legend: {
       display: true,
       position: 'top' as const,
       labels: {
-        font: { size: 12 }
+        font: { size: 12 },
+        padding: 16,
+        boxWidth: 12
       }
     },
     title: {
       display: false
     },
     datalabels: {
-      anchor: 'end' as const,
-      align: 'top' as const,
+      anchor: (ctx: { dataset: { data: unknown[] }; dataIndex: number }) =>
+        etiquetaAbajo(ctx) ? ('start' as const) : ('end' as const),
+      align: (ctx: { dataset: { data: unknown[] }; dataIndex: number }) =>
+        etiquetaAbajo(ctx) ? ('bottom' as const) : ('top' as const),
+      offset: (ctx: { dataset: { data: unknown[] }; dataIndex: number }) =>
+        etiquetaAbajo(ctx) ? 10 : 6,
       color: '#0f172a',
-      font: { weight: 'bold' as const, size: 12 },
+      font: { weight: 'bold' as const, size: 11 },
       formatter: (value: number) => `${value.toFixed(1)}%`
     }
   },
@@ -106,13 +124,16 @@ const chartOptions = computed(() => ({
       ticks: {
         autoSkip: false,
         maxRotation: 0,
-        minRotation: 0
+        minRotation: 0,
+        padding: 4
       }
     },
     y: {
       beginAtZero: true,
       max: 100,
+      grace: '5%',
       ticks: {
+        padding: 8,
         callback: (value: number | string) => `${value}%`
       }
     }

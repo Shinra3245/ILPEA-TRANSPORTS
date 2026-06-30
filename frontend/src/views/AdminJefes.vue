@@ -4,18 +4,11 @@
 
     <main class="main-content">
       <header class="content-header">
-        <div class="header-flex">
-          <h2>Gestión de Usuarios</h2>
-        </div>
+        <h2>Gestión de Jefes</h2>
+        <p class="subtitle">Alta, edición y baja de jefes de turno.</p>
       </header>
 
-      <section class="crud-section">
-        <JefeCrudPanel />
-      </section>
-
-      <section class="crud-section">
-        <EmpleadoCrudPanel />
-      </section>
+      <JefeCrudPanel />
     </main>
   </div>
 </template>
@@ -23,7 +16,6 @@
 <script setup lang="ts">
 import AdminSidebar from '../components/layout/AdminSidebar.vue';
 import JefeCrudPanel from '../components/JefeCrudPanel.vue';
-import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue';
 </script>
 
 <style scoped>
@@ -38,13 +30,8 @@ import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue';
 
 .main-content {
   flex: 1;
+  min-width: 0;
   padding: 3rem;
-}
-
-.header-flex {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
 }
 
 .content-header {
@@ -52,13 +39,15 @@ import EmpleadoCrudPanel from '../components/EmpleadoCrudPanel.vue';
 }
 
 .content-header h2 {
-  margin: 0;
+  margin: 0 0 0.35rem 0;
   font-size: 1.5rem;
   color: #1a1a1a;
 }
 
-.crud-section {
-  margin-bottom: 2rem;
+.subtitle {
+  margin: 0;
+  color: var(--ilpea-gray-500);
+  font-size: 0.92rem;
 }
 
 @media (max-width: 768px) {

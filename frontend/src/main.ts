@@ -4,6 +4,7 @@ import App from './App.vue'
 import router from './router'
 import './assets/base.css'
 import './assets/tokens.css'
+import './assets/crud-admin.css'
 
 const app = createApp(App)
 app.use(router)
